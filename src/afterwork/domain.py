@@ -53,12 +53,16 @@ class RecurringFlow:
     amount: float
     frequency: Frequency
     starts_on: date
+    ends_on: date | None = None
     category: str = "general"
     target: FlowTarget = FlowTarget.CASH
-    annual_discount_rate: float = 0.0
+    annual_adjustment_rate: float = 0.0
+    enabled: bool = True
 
     def occurs_in_month(self, current_month: date) -> bool:
         if current_month < self.starts_on:
+            return False
+        if self.ends_on is not None and current_month > self.ends_on:
             return False
         if self.frequency == Frequency.MONTHLY:
             return True
@@ -69,11 +73,14 @@ class RecurringFlow:
         return (self.__class__.__name__, self.category)
 
     @property
-    def monthly_discount_rate(self) -> float:
-        return (1 + self.annual_discount_rate) ** (1 / 12) - 1
+    def monthly_adjustment_rate(self) -> float:
+        return (1 + self.annual_adjustment_rate) ** (1 / 12) - 1
 
-    def to_real(self, nominal_amount: float, periods: int) -> float:
-        return nominal_amount / ((1 + self.monthly_discount_rate) ** periods)
+    def nominal_amount_for_period(self, periods: int) -> float:
+        return self.amount * ((1 + self.monthly_adjustment_rate) ** periods)
+
+    def present_value(self, nominal_amount: float, periods: int) -> float:
+        return nominal_amount / ((1 + self.monthly_adjustment_rate) ** periods)
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,7 @@ class OneOffEvent:
     occurs_on: date
     category: str = "general"
     target: FlowTarget = FlowTarget.CASH
+    enabled: bool = True
 
     def occurs_in_month(self, current_month: date) -> bool:
         return self.occurs_on.year == current_month.year and self.occurs_on.month == current_month.month
@@ -108,10 +116,12 @@ class MonthlyRecord:
     cash_flow_nominal: float
     portfolio_contribution_nominal: float
     portfolio_growth_nominal: float
-    discounted_flow_real: float
+    portfolio_transfer_nominal: float
+    flow_present_value: float
     cash_balance: float
     portfolio_balance: float
     total_balance: float
+    portfolio_underflow: bool
     applied_flow_names: tuple[str, ...]
 
 

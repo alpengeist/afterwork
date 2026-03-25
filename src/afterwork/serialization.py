@@ -34,9 +34,11 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                 "amount": flow.amount,
                 "frequency": flow.frequency.value,
                 "starts_on": _date_to_str(flow.starts_on),
+                "ends_on": _date_to_str(flow.ends_on) if flow.ends_on else None,
                 "category": flow.category,
                 "target": flow.target.value,
-                "annual_discount_rate": flow.annual_discount_rate,
+                "annual_adjustment_rate": flow.annual_adjustment_rate,
+                "enabled": flow.enabled,
             }
             for flow in plan.recurring_flows
         ],
@@ -47,6 +49,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                 "occurs_on": _date_to_str(event.occurs_on),
                 "category": event.category,
                 "target": event.target.value,
+                "enabled": event.enabled,
             }
             for event in plan.one_off_events
         ],
@@ -60,9 +63,11 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
             amount=float(item["amount"]),
             frequency=Frequency(item["frequency"]),
             starts_on=_date_from_str(item["starts_on"]),
+            ends_on=_date_from_str(item["ends_on"]) if item.get("ends_on") else None,
             category=item.get("category", "general"),
             target=FlowTarget(item.get("target", FlowTarget.CASH.value)),
-            annual_discount_rate=float(item.get("annual_discount_rate", 0.0)),
+            annual_adjustment_rate=float(item.get("annual_adjustment_rate", 0.0)),
+            enabled=bool(item.get("enabled", True)),
         )
         for item in data.get("recurring_flows", [])
     ]
@@ -73,6 +78,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
             occurs_on=_date_from_str(item["occurs_on"]),
             category=item.get("category", "general"),
             target=FlowTarget(item.get("target", FlowTarget.CASH.value)),
+            enabled=bool(item.get("enabled", True)),
         )
         for item in data.get("one_off_events", [])
     ]
@@ -84,7 +90,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
             target_age_years=int(person_data["target_age_years"]),
         ),
         start_month=_date_from_str(data["start_month"]),
-        starting_cash_balance=float(data.get("starting_cash_balance", data.get("opening_balance", 0.0))),
+        starting_cash_balance=float(data.get("starting_cash_balance", 0.0)),
         portfolio=Portfolio(
             starting_balance=float(portfolio_data.get("starting_balance", 0.0)),
             annual_growth_rate=float(portfolio_data.get("annual_growth_rate", 0.0)),

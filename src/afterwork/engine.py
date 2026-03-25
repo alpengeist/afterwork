@@ -18,7 +18,9 @@ class SimulationEngine:
         records: list[MonthlyRecord] = []
         cash_balance = plan.starting_cash_balance
         portfolio_balance = plan.portfolio.starting_balance
-        replacement_starts = self._replacement_starts(plan.recurring_flows)
+        active_recurring_flows = [flow for flow in plan.recurring_flows if flow.enabled]
+        active_one_off_events = [event for event in plan.one_off_events if event.enabled]
+        replacement_starts = self._replacement_starts(active_recurring_flows)
 
         for offset in range(plan.simulation_months()):
             current_month = add_months(plan.start_month, offset)
@@ -27,25 +29,26 @@ class SimulationEngine:
             applied_names: list[str] = []
             cash_flow_nominal = 0.0
             portfolio_contribution_nominal = 0.0
-            discounted_flow_real = 0.0
+            flow_present_value = 0.0
 
-            for flow in plan.recurring_flows:
+            for flow in active_recurring_flows:
                 if not flow.occurs_in_month(current_month):
                     continue
                 successor_start = replacement_starts.get(id(flow))
                 if successor_start is not None and current_month >= successor_start:
                     continue
+                adjusted_amount = flow.nominal_amount_for_period(period_index)
 
                 if flow.target == FlowTarget.CASH:
-                    cash_flow_nominal += flow.amount
+                    cash_flow_nominal += adjusted_amount
                 else:
-                    cash_flow_nominal -= flow.amount
-                    portfolio_contribution_nominal += flow.amount
+                    cash_flow_nominal -= adjusted_amount
+                    portfolio_contribution_nominal += adjusted_amount
 
-                discounted_flow_real += flow.to_real(flow.amount, period_index)
+                flow_present_value += flow.present_value(adjusted_amount, period_index)
                 applied_names.append(flow.name)
 
-            for event in plan.one_off_events:
+            for event in active_one_off_events:
                 if not event.occurs_in_month(current_month):
                     continue
 
@@ -55,13 +58,21 @@ class SimulationEngine:
                     cash_flow_nominal -= event.amount
                     portfolio_contribution_nominal += event.amount
 
-                discounted_flow_real += event.amount
+                flow_present_value += event.amount
                 applied_names.append(event.name)
 
             cash_balance += cash_flow_nominal
             portfolio_balance += portfolio_contribution_nominal
             portfolio_growth_nominal = portfolio_balance * plan.portfolio.monthly_growth_rate
             portfolio_balance += portfolio_growth_nominal
+            portfolio_transfer_nominal = 0.0
+
+            if cash_balance <= 0:
+                portfolio_transfer_nominal = -cash_balance
+                cash_balance += portfolio_transfer_nominal
+                portfolio_balance -= portfolio_transfer_nominal
+
+            portfolio_underflow = portfolio_balance < 0
             total_balance = cash_balance + portfolio_balance
             age_years = plan.person.current_age_years + (offset + 1) / 12
 
@@ -72,10 +83,12 @@ class SimulationEngine:
                     cash_flow_nominal=cash_flow_nominal,
                     portfolio_contribution_nominal=portfolio_contribution_nominal,
                     portfolio_growth_nominal=portfolio_growth_nominal,
-                    discounted_flow_real=discounted_flow_real,
+                    portfolio_transfer_nominal=portfolio_transfer_nominal,
+                    flow_present_value=flow_present_value,
                     cash_balance=cash_balance,
                     portfolio_balance=portfolio_balance,
                     total_balance=total_balance,
+                    portfolio_underflow=portfolio_underflow,
                     applied_flow_names=tuple(applied_names),
                 )
             )
