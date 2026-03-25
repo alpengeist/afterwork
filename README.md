@@ -112,6 +112,7 @@ A Qt desktop UI is included in [src/afterwork/ui_qt.py](C:/proj/afterwork/src/af
 The layout matches your proposal:
 
 - top pane: scenario editor,
+- middle pane: quarterly value chart with recurring-flow lines, one-off event markers, and cash/portfolio/total balance lines,
 - bottom pane: simulation output,
 - rows in the scenario editor represent one recurring flow or one-off event,
 - time flows downward in the scenario table.

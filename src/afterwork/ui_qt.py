@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QColor, QBrush, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QStyle,
@@ -40,6 +42,7 @@ from afterwork import (
     plan_from_json,
     plan_to_json,
 )
+from afterwork.domain import add_months, month_index
 
 
 SCENARIO_HEADERS = ["On", "Type", "Name", "Amount", "Target", "Frequency", "Start", "End", "Category", "Yearly Adj. %"]
@@ -55,6 +58,20 @@ RESULT_HEADERS = [
     "Total Value",
     "Flows",
 ]
+
+
+@dataclass(frozen=True)
+class ChartPoint:
+    month: date
+    value: float
+
+
+@dataclass(frozen=True)
+class ChartSeries:
+    name: str
+    color: QColor
+    points: list[ChartPoint]
+    series_type: str
 
 
 class TableTextDelegate(QStyledItemDelegate):
@@ -79,10 +96,165 @@ class TableTextDelegate(QStyledItemDelegate):
         editor.setGeometry(text_rect.adjusted(self.EDITOR_X_OFFSET, self.EDITOR_Y_OFFSET, 0, 0))
 
 
+class TimelineWidget(QWidget):
+    LEFT_MARGIN = 70
+    RIGHT_MARGIN = 170
+    TOP_MARGIN = 34
+    BOTTOM_MARGIN = 34
+    CHART_HEIGHT = 280
+    MONTH_WIDTH = 10
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.plan_start: date | None = None
+        self.plan_end: date | None = None
+        self.series: list[ChartSeries] = []
+
+    def set_timeline(self, plan_start: date | None, plan_end: date | None, series: list[ChartSeries]) -> None:
+        self.plan_start = plan_start
+        self.plan_end = plan_end
+        self.series = series
+        size = self.sizeHint()
+        self.setMinimumSize(size)
+        self.resize(size)
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        months = self._timeline_months()
+        width = self.LEFT_MARGIN + self.RIGHT_MARGIN + max(months, 1) * self.MONTH_WIDTH
+        height = self.TOP_MARGIN + self.BOTTOM_MARGIN + self.CHART_HEIGHT
+        return QSize(width, height)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#ffffff"))
+
+        if self.plan_start is None or self.plan_end is None:
+            painter.setPen(QColor("#666666"))
+            painter.drawText(self.rect().adjusted(16, 16, -16, -16), "Timeline is unavailable until the scenario dates are valid.")
+            return
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self._draw_axes(painter)
+        self._draw_quarter_grid(painter)
+        self._draw_series(painter)
+
+    def _timeline_months(self) -> int:
+        if self.plan_start is None or self.plan_end is None:
+            return 1
+        return max(month_index(self.plan_start, self.plan_end) + 1, 1)
+
+    def _x_for_month(self, value: date, center: bool = False) -> int:
+        if self.plan_start is None:
+            return self.LEFT_MARGIN
+        offset = max(month_index(self.plan_start, value), 0)
+        if center:
+            offset += 0.5
+        return round(self.LEFT_MARGIN + offset * self.MONTH_WIDTH)
+
+    def _plot_top(self) -> int:
+        return self.TOP_MARGIN
+
+    def _plot_bottom(self) -> int:
+        return self.TOP_MARGIN + self.CHART_HEIGHT
+
+    def _value_range(self) -> tuple[float, float]:
+        values = [0.0]
+        for series in self.series:
+            values.extend(point.value for point in series.points)
+        minimum = min(values)
+        maximum = max(values)
+        if minimum == maximum:
+            padding = max(abs(minimum) * 0.1, 1.0)
+            return minimum - padding, maximum + padding
+        padding = (maximum - minimum) * 0.12
+        return minimum - padding, maximum + padding
+
+    def _y_for_value(self, value: float) -> int:
+        minimum, maximum = self._value_range()
+        plot_height = self._plot_bottom() - self._plot_top()
+        position = 0.5 if maximum == minimum else (value - minimum) / (maximum - minimum)
+        return round(self._plot_bottom() - position * plot_height)
+
+    def _draw_axes(self, painter: QPainter) -> None:
+        axis_pen = QPen(QColor("#97a3b3"))
+        painter.setPen(axis_pen)
+        painter.drawLine(self.LEFT_MARGIN, self._plot_top(), self.LEFT_MARGIN, self._plot_bottom())
+        painter.drawLine(self.LEFT_MARGIN, self._plot_bottom(), self.width() - self.RIGHT_MARGIN + 30, self._plot_bottom())
+
+        minimum, maximum = self._value_range()
+        tick_pen = QPen(QColor("#657182"))
+        painter.setPen(tick_pen)
+        for value in [minimum, (minimum + maximum) / 2, maximum]:
+            y = self._y_for_value(value)
+            painter.drawLine(self.LEFT_MARGIN - 5, y, self.LEFT_MARGIN, y)
+            painter.drawText(8, y + 5, f"{value:,.0f}")
+
+        if minimum < 0 < maximum:
+            zero_y = self._y_for_value(0.0)
+            painter.setPen(QPen(QColor("#b8c0cb"), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(self.LEFT_MARGIN, zero_y, self.width() - self.RIGHT_MARGIN + 30, zero_y)
+
+    def _draw_quarter_grid(self, painter: QPainter) -> None:
+        assert self.plan_start is not None
+        total_months = self._timeline_months()
+        quarter_pen = QPen(QColor("#c1cad6"))
+        label_pen = QPen(QColor("#5b6470"))
+
+        for month_offset in range(0, total_months + 1, 3):
+            tick_date = add_months(self.plan_start, month_offset)
+            x = self.LEFT_MARGIN + month_offset * self.MONTH_WIDTH
+            painter.setPen(quarter_pen)
+            painter.drawLine(x, self._plot_top(), x, self._plot_bottom())
+            painter.setPen(label_pen)
+            quarter = ((tick_date.month - 1) // 3) + 1
+            painter.drawText(x + 4, 18, f"{tick_date.year} Q{quarter}")
+
+    def _draw_series(self, painter: QPainter) -> None:
+        font_metrics = QFontMetrics(painter.font())
+        for series in self.series:
+            if not series.points:
+                continue
+
+            if series.series_type == "event":
+                self._draw_event_series(painter, series, font_metrics)
+            else:
+                self._draw_line_series(painter, series, font_metrics)
+
+    def _draw_line_series(self, painter: QPainter, series: ChartSeries, font_metrics: QFontMetrics) -> None:
+        width = 3 if series.series_type == "balance" else 2
+        pen = QPen(series.color, width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+
+        previous_point: tuple[int, int] | None = None
+        for point in series.points:
+            current = (self._x_for_month(point.month, center=True), self._y_for_value(point.value))
+            if previous_point is not None:
+                painter.drawLine(previous_point[0], previous_point[1], current[0], current[1])
+            previous_point = current
+
+        if previous_point is not None:
+            painter.setPen(QPen(series.color.darker(135)))
+            label_x = min(previous_point[0] + 10, self.width() - self.RIGHT_MARGIN + 12)
+            label_y = previous_point[1] - 6
+            painter.drawText(label_x, label_y, font_metrics.elidedText(series.name, Qt.TextElideMode.ElideRight, self.RIGHT_MARGIN - 18))
+
+    def _draw_event_series(self, painter: QPainter, series: ChartSeries, font_metrics: QFontMetrics) -> None:
+        painter.setPen(QPen(series.color.darker(130), 2))
+        painter.setBrush(QBrush(series.color))
+        for point in series.points:
+            x = self._x_for_month(point.month, center=True)
+            y = self._y_for_value(point.value)
+            painter.drawEllipse(x - 6, y - 6, 12, 12)
+            painter.drawText(x + 10, y - 8, font_metrics.elidedText(series.name, Qt.TextElideMode.ElideRight, 180))
+
+
 class PlannerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.current_file: Path | None = None
+        self.current_result = None
         self.setWindowTitle("Afterwork Planner")
         self.resize(1500, 900)
 
@@ -94,11 +266,15 @@ class PlannerWindow(QMainWindow):
         root_layout.addWidget(splitter)
 
         splitter.addWidget(self._build_scenario_panel())
+        splitter.addWidget(self._build_timeline_panel())
         splitter.addWidget(self._build_results_panel())
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(2, 3)
 
         self._populate_demo_data()
+        self._connect_refresh_signals()
+        self.refresh_timeline()
         self.run_simulation()
 
     def _build_scenario_panel(self) -> QWidget:
@@ -201,6 +377,22 @@ class PlannerWindow(QMainWindow):
         layout.addWidget(hint)
         return panel
 
+    def _build_timeline_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Value Timeline")
+        title.setContentsMargins(10, 6, 10, 0)
+        layout.addWidget(title)
+
+        self.timeline_widget = TimelineWidget()
+        self.timeline_scroll = QScrollArea()
+        self.timeline_scroll.setWidgetResizable(False)
+        self.timeline_scroll.setWidget(self.timeline_widget)
+        layout.addWidget(self.timeline_scroll)
+        return panel
+
     def _build_results_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -228,6 +420,12 @@ class PlannerWindow(QMainWindow):
         for row in rows:
             self._append_scenario_row(row)
 
+    def _connect_refresh_signals(self) -> None:
+        self.scenario_table.itemChanged.connect(self.refresh_timeline)
+        self.start_month_edit.editingFinished.connect(self.refresh_timeline)
+        self.current_age_spin.valueChanged.connect(self.refresh_timeline)
+        self.target_age_spin.valueChanged.connect(self.refresh_timeline)
+
     def _enabled_item(self, enabled: bool) -> QTableWidgetItem:
         item = QTableWidgetItem()
         item.setFlags(
@@ -251,16 +449,19 @@ class PlannerWindow(QMainWindow):
         self._append_scenario_row(
             [True, "RecurringFlow", "New flow", "0", "cash", "monthly", self.start_month_edit.text(), "", "general", "0.0"]
         )
+        self.refresh_timeline()
 
     def add_one_off_event(self) -> None:
         self._append_scenario_row(
             [True, "OneOffEvent", "New event", "0", "cash", "", self.start_month_edit.text(), "", "general", ""]
         )
+        self.refresh_timeline()
 
     def delete_selected_row(self) -> None:
         row = self.scenario_table.currentRow()
         if row >= 0:
             self.scenario_table.removeRow(row)
+            self.refresh_timeline()
 
     def _scenario_value(self, row: int, column: int) -> str:
         item = self.scenario_table.item(row, column)
@@ -337,6 +538,7 @@ class PlannerWindow(QMainWindow):
             QMessageBox.critical(self, "Simulation error", str(exc))
             return
 
+        self.current_result = result
         self.results_table.setRowCount(0)
         for record in result.records:
             row = self.results_table.rowCount()
@@ -364,6 +566,7 @@ class PlannerWindow(QMainWindow):
             f"Months: {len(result.records)}   Cash: {result.final_cash_balance:.2f}   "
             f"Portfolio: {result.final_portfolio_balance:.2f}   Total: {result.final_total_balance:.2f}"
         )
+        self.refresh_timeline()
 
     def save_plan(self) -> None:
         try:
@@ -432,7 +635,109 @@ class PlannerWindow(QMainWindow):
 
         self.current_file = Path(path)
         self.setWindowTitle(f"Afterwork Planner - {self.current_file}")
+        self.refresh_timeline()
         self.run_simulation()
+
+    def refresh_timeline(self) -> None:
+        try:
+            plan = self._build_plan()
+        except Exception:
+            self.timeline_widget.set_timeline(None, None, [])
+            return
+
+        plan_end = add_months(plan.start_month, max(plan.simulation_months() - 1, 0))
+        try:
+            result = SimulationEngine().run(plan)
+        except Exception:
+            self.timeline_widget.set_timeline(None, None, [])
+            return
+
+        self.timeline_widget.set_timeline(plan.start_month, plan_end, self._chart_series(plan, result, plan_end))
+
+    def _chart_series(self, plan: Plan, result, plan_end: date) -> list[ChartSeries]:
+        series: list[ChartSeries] = []
+        quarterly_months = self._quarterly_months(plan.start_month, plan_end)
+
+        for flow, effective_end in self._effective_recurring_flows(plan, plan_end):
+            points: list[ChartPoint] = []
+            for current_month in quarterly_months:
+                if current_month < flow.starts_on or current_month > effective_end:
+                    continue
+                if not flow.occurs_in_month(current_month):
+                    continue
+                periods = month_index(plan.start_month, current_month)
+                points.append(ChartPoint(current_month, flow.nominal_amount_for_period(periods)))
+
+            if points:
+                series.append(
+                    ChartSeries(
+                        name=flow.name,
+                        color=QColor("#2f8f63") if flow.target == FlowTarget.PORTFOLIO else QColor("#2e6ea6"),
+                        points=points,
+                        series_type="flow",
+                    )
+                )
+
+        for event in plan.one_off_events:
+            if not event.enabled:
+                continue
+            series.append(
+                ChartSeries(
+                    name=event.name,
+                    color=QColor("#d9822b"),
+                    points=[ChartPoint(event.occurs_on, event.amount)],
+                    series_type="event",
+                )
+            )
+
+        balance_specs = [
+            ("Cash Balance", QColor("#4a5568"), "cash_balance"),
+            ("Portfolio", QColor("#7f3c8d"), "portfolio_balance"),
+            ("Total", QColor("#111827"), "total_balance"),
+        ]
+        for label, color, attribute in balance_specs:
+            points = [
+                ChartPoint(record.month, getattr(record, attribute))
+                for record in result.records[::3]
+            ]
+            if result.records and (not points or points[-1].month != result.records[-1].month):
+                points.append(ChartPoint(result.records[-1].month, getattr(result.records[-1], attribute)))
+            if points:
+                series.append(ChartSeries(name=label, color=color, points=points, series_type="balance"))
+
+        return series
+
+    def _quarterly_months(self, plan_start: date, plan_end: date) -> list[date]:
+        months: list[date] = []
+        offset = 0
+        while True:
+            current = add_months(plan_start, offset)
+            if current > plan_end:
+                break
+            months.append(current)
+            offset += 3
+        if not months or months[-1] != plan_end:
+            months.append(plan_end)
+        return months
+
+    def _effective_recurring_flows(self, plan: Plan, plan_end: date) -> list[tuple[RecurringFlow, date]]:
+        grouped: dict[tuple[str, str], list[RecurringFlow]] = {}
+        for flow in plan.recurring_flows:
+            if not flow.enabled:
+                continue
+            grouped.setdefault((flow.__class__.__name__, flow.category), []).append(flow)
+
+        effective_flows: list[tuple[RecurringFlow, date]] = []
+        for flows in grouped.values():
+            ordered = sorted(flows, key=lambda item: item.starts_on)
+            for index, flow in enumerate(ordered):
+                effective_end = flow.ends_on or plan_end
+                if index < len(ordered) - 1:
+                    successor_start = ordered[index + 1].starts_on
+                    effective_end = min(effective_end, add_months(successor_start, -1))
+                if effective_end >= flow.starts_on:
+                    effective_flows.append((flow, effective_end))
+        return effective_flows
 
 
 def main() -> None:
