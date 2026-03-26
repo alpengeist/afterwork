@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QCloseEvent, QColor, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -23,12 +24,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QSplitter,
+    QSizePolicy,
     QStyle,
     QStyleOptionViewItem,
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -141,6 +143,72 @@ class ScenarioTableDelegate(TableTextDelegate):
             return
 
         super().setModelData(editor, model, index)
+
+
+class CollapsibleSection(QWidget):
+    expanded_changed = Signal(bool)
+
+    def __init__(self, title: str, content: QWidget, *, expanded: bool = True, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.content = content
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(10)
+
+        self.toggle_button = QToolButton()
+        self.toggle_button.setText(title)
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.setChecked(expanded)
+        self.toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle_button.setStyleSheet(
+            """
+            QToolButton {
+                background: transparent;
+                border: none;
+                color: #1f2937;
+                padding: 2px 0;
+            }
+            QToolButton:checked {
+                background: transparent;
+                border: none;
+                color: #1f2937;
+            }
+            QToolButton:hover {
+                background: transparent;
+                border: none;
+                color: #111827;
+            }
+            """
+        )
+        self.toggle_button.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self.toggle_button.clicked.connect(self._set_expanded)
+        layout.addWidget(self.toggle_button)
+        layout.addWidget(self.content)
+
+        self._set_expanded(expanded)
+
+    def _set_expanded(self, expanded: bool) -> None:
+        self.toggle_button.setChecked(expanded)
+        self.toggle_button.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self.content.setVisible(expanded)
+        if expanded:
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16_777_215)
+            self.setSizePolicy(self.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Preferred)
+        else:
+            collapsed_height = self.toggle_button.sizeHint().height()
+            margins = self.layout().contentsMargins()
+            collapsed_height += margins.top() + margins.bottom()
+            self.setMinimumHeight(collapsed_height)
+            self.setMaximumHeight(collapsed_height)
+            self.setSizePolicy(self.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed)
+        self.updateGeometry()
+        self.expanded_changed.emit(expanded)
 
 
 class TimelineWidget(QWidget):
@@ -424,10 +492,131 @@ class TimelineWidget(QWidget):
         return self.LEFT_MARGIN <= pos.x() <= self.width() - self.RIGHT_MARGIN + 30 and self._plot_top() <= pos.y() <= self._plot_bottom()
 
 
+@dataclass(frozen=True)
+class EventTimelineItem:
+    name: str
+    start: date
+    end: date
+    color: QColor
+    item_type: str
+
+
+class EventTimelineWidget(QWidget):
+    LEFT_MARGIN = 150
+    RIGHT_MARGIN = 24
+    TOP_MARGIN = 20
+    BOTTOM_MARGIN = 20
+    ROW_HEIGHT = 28
+    MONTH_WIDTH = 10
+    DOT_RADIUS = 5
+    BAR_HEIGHT = 10
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.plan_start: date | None = None
+        self.plan_end: date | None = None
+        self.items: list[EventTimelineItem] = []
+        self.setMinimumHeight(self.TOP_MARGIN + self.BOTTOM_MARGIN + self.ROW_HEIGHT * 4)
+
+    def set_timeline(self, plan_start: date | None, plan_end: date | None, items: list[EventTimelineItem]) -> None:
+        self.plan_start = plan_start
+        self.plan_end = plan_end
+        self.items = items
+        size = self.sizeHint()
+        self.setMinimumSize(size)
+        self.resize(size)
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        months = self._timeline_months()
+        width = self.LEFT_MARGIN + self.RIGHT_MARGIN + max(months, 1) * self.MONTH_WIDTH
+        height = self.TOP_MARGIN + self.BOTTOM_MARGIN + max(len(self.items), 1) * self.ROW_HEIGHT
+        return QSize(width, height)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor("#ffffff"))
+
+        if self.plan_start is None or self.plan_end is None:
+            painter.setPen(QColor("#666666"))
+            painter.drawText(self.rect().adjusted(16, 16, -16, -16), "Event timeline is unavailable until the scenario dates are valid.")
+            return
+
+        self._draw_grid(painter)
+        self._draw_items(painter)
+
+    def _timeline_months(self) -> int:
+        if self.plan_start is None or self.plan_end is None:
+            return 1
+        return max(month_index(self.plan_start, self.plan_end) + 1, 1)
+
+    def _x_for_month(self, value: date, center: bool = False) -> int:
+        if self.plan_start is None:
+            return self.LEFT_MARGIN
+        offset = max(month_index(self.plan_start, value), 0)
+        if center:
+            offset += 0.5
+        return round(self.LEFT_MARGIN + offset * self.MONTH_WIDTH)
+
+    def _row_y(self, index: int) -> int:
+        return self.TOP_MARGIN + index * self.ROW_HEIGHT + self.ROW_HEIGHT // 2
+
+    def _draw_grid(self, painter: QPainter) -> None:
+        assert self.plan_start is not None
+        total_months = self._timeline_months()
+        plot_bottom = self.TOP_MARGIN + max(len(self.items), 1) * self.ROW_HEIGHT
+        quarter_pen = QPen(QColor("#d5dbe3"))
+        year_pen = QPen(QColor("#5b6470"))
+
+        for month_offset in range(0, total_months + 1, 3):
+            tick_date = add_months(self.plan_start, month_offset)
+            x = self.LEFT_MARGIN + month_offset * self.MONTH_WIDTH
+            painter.setPen(quarter_pen)
+            painter.drawLine(x, self.TOP_MARGIN - 8, x, plot_bottom)
+            if tick_date.month == 1:
+                painter.setPen(year_pen)
+                painter.drawText(x + 4, 12, f"{tick_date.year}")
+
+        painter.setPen(QPen(QColor("#c1cad6")))
+        painter.drawLine(self.LEFT_MARGIN, plot_bottom, self.width() - self.RIGHT_MARGIN, plot_bottom)
+
+    def _draw_items(self, painter: QPainter) -> None:
+        font_metrics = QFontMetrics(painter.font())
+        text_pen = QPen(QColor("#334155"))
+        for index, item in enumerate(self.items):
+            y = self._row_y(index)
+            label_rect = QRect(8, y - 10, self.LEFT_MARGIN - 16, 20)
+            painter.setPen(text_pen)
+            painter.drawText(
+                label_rect,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                font_metrics.elidedText(item.name, Qt.TextElideMode.ElideRight, label_rect.width()),
+            )
+
+            if item.item_type == "one_off":
+                x = self._x_for_month(item.start, center=True)
+                painter.setPen(QPen(item.color.darker(130), 2))
+                painter.setBrush(QBrush(item.color))
+                painter.drawEllipse(x - self.DOT_RADIUS, y - self.DOT_RADIUS, self.DOT_RADIUS * 2, self.DOT_RADIUS * 2)
+                continue
+
+            start_x = self._x_for_month(item.start)
+            end_x = self._x_for_month(item.end, center=True)
+            width = max(end_x - start_x, self.MONTH_WIDTH // 2)
+            bar_rect = QRect(start_x, y - self.BAR_HEIGHT // 2, width, self.BAR_HEIGHT)
+            painter.setPen(QPen(item.color.darker(130), 1))
+            painter.setBrush(QBrush(item.color))
+            painter.drawRoundedRect(bar_rect, 4, 4)
+
+
 class PlannerWindow(QMainWindow):
     TOOLBAR_BUTTON_WIDTH = 118
     TOOLBAR_BUTTON_HEIGHT = 36
     AUTOSAVE_DELAY_MS = 1200
+    SCENARIO_CATEGORY_COLUMN = 2
+    SCENARIO_START_COLUMN = 6
+    SCENARIO_END_COLUMN = 7
 
     def __init__(self, settings_store: SettingsStore) -> None:
         super().__init__()
@@ -436,6 +625,9 @@ class PlannerWindow(QMainWindow):
         self.current_result = None
         self.is_dirty = False
         self._suspend_change_tracking = False
+        self._scenario_row_id_counter = 0
+        self._scenario_sort_column: int | None = None
+        self._scenario_sort_ascending = True
         self.autosave_path = self.settings_store.get_autosave_path()
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setSingleShot(True)
@@ -447,6 +639,8 @@ class PlannerWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(14, 10, 14, 14)
+        root_layout.setSpacing(12)
 
         self.scenario_name_label = QLabel("No scenario loaded")
         scenario_font = self.scenario_name_label.font()
@@ -454,32 +648,40 @@ class PlannerWindow(QMainWindow):
         scenario_font.setBold(True)
         self.scenario_name_label.setFont(scenario_font)
         self.scenario_name_label.setContentsMargins(10, 6, 10, 0)
+        self.scenario_name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         root_layout.addWidget(self.scenario_name_label)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        root_layout.addWidget(splitter)
+        self.top_controls_panel = self._build_top_controls()
+        self.top_controls_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        root_layout.addWidget(self.top_controls_panel)
 
-        splitter.addWidget(self._build_scenario_panel())
-        splitter.addWidget(self._build_timeline_panel())
-        splitter.addWidget(self._build_results_panel())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setStretchFactor(2, 3)
+        self.scenario_panel = self._build_scenario_panel()
+        self.scenario_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        root_layout.addWidget(self.scenario_panel)
+
+        self.timeline_panel = self._build_timeline_panel()
+        root_layout.addWidget(self.timeline_panel, 4)
+
+        self.results_panel = self._build_results_panel()
+        root_layout.addWidget(self.results_panel, 1)
 
         self._connect_refresh_signals()
+        QTimer.singleShot(0, self._update_collapsible_panel_layout)
         self.refresh_timeline()
         self.run_simulation()
         self._set_dirty(False)
 
-    def _build_scenario_panel(self) -> QWidget:
+    def _build_top_controls(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 2, 10, 6)
+        layout.setSpacing(12)
 
         settings = QWidget()
         settings_layout = QGridLayout(settings)
         settings_layout.setContentsMargins(0, 0, 0, 0)
-        settings_layout.setHorizontalSpacing(10)
-        settings_layout.setVerticalSpacing(6)
+        settings_layout.setHorizontalSpacing(14)
+        settings_layout.setVerticalSpacing(10)
 
         self.start_month_edit = QLineEdit("2026-01-01")
         self.start_month_edit.setFixedWidth(110)
@@ -521,13 +723,9 @@ class PlannerWindow(QMainWindow):
 
         layout.addWidget(settings)
 
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(10)
+        file_toolbar = QHBoxLayout()
+        file_toolbar.setSpacing(10)
         for label, handler in [
-            ("Add Flow", self.add_recurring_flow),
-            ("Add Event", self.add_one_off_event),
-            ("Delete Row", self.delete_selected_row),
-            ("Run Simulation", self.run_simulation),
             ("Save", self.save_plan),
             ("Save As", self.save_plan_as),
             ("Load", self.load_plan),
@@ -554,9 +752,17 @@ class PlannerWindow(QMainWindow):
                 """
             )
             button.clicked.connect(handler)
-            toolbar.addWidget(button)
-        toolbar.addStretch()
-        layout.addLayout(toolbar)
+            file_toolbar.addWidget(button)
+        file_toolbar.addStretch()
+        layout.addLayout(file_toolbar)
+
+        return panel
+
+    def _build_scenario_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(12)
 
         self.scenario_table = QTableWidget(0, len(SCENARIO_HEADERS))
         self.scenario_table.setHorizontalHeaderLabels(SCENARIO_HEADERS)
@@ -566,6 +772,8 @@ class PlannerWindow(QMainWindow):
         self.scenario_table.verticalHeader().setVisible(False)
         header = self.scenario_table.horizontalHeader()
         header.setStretchLastSection(False)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
         self.scenario_table.setColumnWidth(0, 64)
         self.scenario_table.setColumnWidth(1, 110)
         self.scenario_table.setColumnWidth(2, 140)
@@ -593,23 +801,78 @@ class PlannerWindow(QMainWindow):
             }
             """
         )
-        layout.addWidget(self.scenario_table)
+
+        scenario_table_container = QWidget()
+        scenario_table_layout = QVBoxLayout(scenario_table_container)
+        scenario_table_layout.setContentsMargins(0, 4, 0, 4)
+        scenario_table_layout.setSpacing(10)
+
+        table_toolbar = QHBoxLayout()
+        table_toolbar.setSpacing(10)
+        for label, handler in [
+            ("Add Flow", self.add_recurring_flow),
+            ("Add Event", self.add_one_off_event),
+            ("Delete Row", self.delete_selected_row),
+            ("Run Simulation", self.run_simulation),
+        ]:
+            button = QPushButton(label)
+            button.setFixedSize(self.TOOLBAR_BUTTON_WIDTH, self.TOOLBAR_BUTTON_HEIGHT)
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #d8e7f5;
+                    border: 1px solid #8eabc7;
+                    border-radius: 6px;
+                    color: #16324a;
+                    font-weight: 600;
+                    padding: 6px 12px;
+                }
+                QPushButton:hover {
+                    background-color: #c8def1;
+                    border-color: #6f95bb;
+                }
+                QPushButton:pressed {
+                    background-color: #b8d1e8;
+                }
+                """
+            )
+            button.clicked.connect(handler)
+            table_toolbar.addWidget(button)
+        table_toolbar.addStretch()
+        scenario_table_layout.addLayout(table_toolbar)
+        scenario_table_layout.addWidget(self.scenario_table)
+        layout.addWidget(CollapsibleSection("Event Table", scenario_table_container, expanded=True))
+
+        self.event_timeline_widget = EventTimelineWidget()
+        self.event_timeline_frame = QFrame()
+        self.event_timeline_frame.setFrameShape(QFrame.Shape.NoFrame)
+        self.event_timeline_frame.setStyleSheet("QFrame { border: none; background: transparent; }")
+        event_timeline_layout = QVBoxLayout(self.event_timeline_frame)
+        event_timeline_layout.setContentsMargins(0, 0, 0, 0)
+        self.event_timeline_scroll = QScrollArea()
+        self.event_timeline_scroll.setWidgetResizable(False)
+        self.event_timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.event_timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.event_timeline_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.event_timeline_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.event_timeline_scroll.setMinimumHeight(self.event_timeline_widget.minimumHeight())
+        self.event_timeline_scroll.setWidget(self.event_timeline_widget)
+        self.event_timeline_scroll.horizontalScrollBar().setSingleStep(self.event_timeline_widget.MONTH_WIDTH * 2)
+        event_timeline_layout.addWidget(self.event_timeline_scroll)
+        layout.addWidget(CollapsibleSection("Event Timeline", self.event_timeline_frame, expanded=True))
 
         return panel
 
     def _build_timeline_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        title = QLabel("Value Timeline")
-        title.setContentsMargins(10, 6, 10, 0)
-        layout.addWidget(title)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(10)
 
         self.chart_container = QWidget()
         self.chart_layout = QVBoxLayout(self.chart_container)
-        self.chart_layout.setContentsMargins(0, 0, 0, 0)
-        self.chart_layout.setSpacing(12)
+        self.chart_layout.setContentsMargins(0, 4, 0, 4)
+        self.chart_layout.setSpacing(16)
 
         self.scenario_chart_title = QLabel("Scenario Values")
         self.scenario_chart_title.setContentsMargins(10, 0, 10, 0)
@@ -643,15 +906,23 @@ class PlannerWindow(QMainWindow):
         self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.timeline_scroll.setWidget(self.chart_container)
         self.timeline_scroll.horizontalScrollBar().setSingleStep(self.timeline_widget.MONTH_WIDTH * 2)
-        layout.addWidget(self.timeline_scroll)
+        timeline_content = QWidget()
+        timeline_content_layout = QVBoxLayout(timeline_content)
+        timeline_content_layout.setContentsMargins(0, 4, 0, 4)
+        timeline_content_layout.setSpacing(10)
+        timeline_content_layout.addWidget(self.timeline_scroll)
+
+        self.timeline_section = CollapsibleSection("Value Timeline", timeline_content, expanded=True)
+        self.timeline_section.expanded_changed.connect(self._on_timeline_section_toggled)
+        layout.addWidget(self.timeline_section)
         return panel
 
     def _build_results_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 4, 0, 0)
 
         self.summary_label = QLabel("No simulation results yet.")
-        layout.addWidget(self.summary_label)
 
         self.results_table = QTableWidget(0, len(RESULT_HEADERS))
         self.results_table.setHorizontalHeaderLabels(RESULT_HEADERS)
@@ -659,11 +930,48 @@ class PlannerWindow(QMainWindow):
         self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.results_table.horizontalHeader().setStretchLastSection(True)
         self.results_table.verticalHeader().setVisible(False)
-        layout.addWidget(self.results_table)
+
+        results_content = QWidget()
+        results_content_layout = QVBoxLayout(results_content)
+        results_content_layout.setContentsMargins(0, 4, 0, 4)
+        results_content_layout.setSpacing(10)
+        results_content_layout.addWidget(self.summary_label)
+        results_content_layout.addWidget(self.results_table)
+        self.results_section = CollapsibleSection("Simulation Table", results_content, expanded=False)
+        self.results_section.expanded_changed.connect(self._on_results_section_toggled)
+        layout.addWidget(self.results_section)
         return panel
+
+    def _set_collapsible_panel_state(self, panel: QWidget, section: CollapsibleSection, expanded: bool) -> None:
+        if expanded:
+            panel.setMinimumHeight(0)
+            panel.setMaximumHeight(16_777_215)
+            panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        else:
+            margins = panel.layout().contentsMargins()
+            collapsed_height = section.maximumHeight() + margins.top() + margins.bottom()
+            panel.setMinimumHeight(collapsed_height)
+            panel.setMaximumHeight(collapsed_height)
+            panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def _update_collapsible_panel_layout(self) -> None:
+        timeline_expanded = self.timeline_section.content.isVisible()
+        results_expanded = self.results_section.content.isVisible()
+        self._set_collapsible_panel_state(self.timeline_panel, self.timeline_section, timeline_expanded)
+        self._set_collapsible_panel_state(self.results_panel, self.results_section, results_expanded)
+        self.timeline_panel.updateGeometry()
+        self.results_panel.updateGeometry()
+        self.centralWidget().layout().activate()
+
+    def _on_timeline_section_toggled(self, _expanded: bool) -> None:
+        self._update_collapsible_panel_layout()
+
+    def _on_results_section_toggled(self, _expanded: bool) -> None:
+        self._update_collapsible_panel_layout()
 
     def _connect_refresh_signals(self) -> None:
         self.scenario_table.itemChanged.connect(self._on_scenario_table_changed)
+        self.scenario_table.horizontalHeader().sectionClicked.connect(self._on_scenario_header_clicked)
         self.start_month_edit.editingFinished.connect(self._on_plan_input_changed)
         self.birthday_edit.editingFinished.connect(self._on_plan_input_changed)
         self.target_age_spin.valueChanged.connect(self._on_plan_input_changed)
@@ -676,7 +984,27 @@ class PlannerWindow(QMainWindow):
             return
         if _item.column() == 1:
             self._sync_frequency_cell(_item.row())
+        if self._scenario_sort_column is not None and _item.column() in {
+            self.SCENARIO_CATEGORY_COLUMN,
+            self.SCENARIO_START_COLUMN,
+            self.SCENARIO_END_COLUMN,
+        }:
+            self._sort_scenario_table(select_row_id=self._scenario_row_id(_item.row()))
         self._mark_dirty()
+        self.refresh_timeline()
+
+    def _on_scenario_header_clicked(self, column: int) -> None:
+        if column not in {self.SCENARIO_CATEGORY_COLUMN, self.SCENARIO_START_COLUMN, self.SCENARIO_END_COLUMN}:
+            return
+
+        if self._scenario_sort_column == column:
+            self._scenario_sort_ascending = not self._scenario_sort_ascending
+        else:
+            self._scenario_sort_column = column
+            self._scenario_sort_ascending = True
+
+        self._sort_scenario_table(select_row_id=self._selected_scenario_row_id())
+        self._update_scenario_sort_indicator()
         self.refresh_timeline()
 
     def _on_plan_input_changed(self, *_args) -> None:
@@ -705,16 +1033,148 @@ class PlannerWindow(QMainWindow):
         item.setCheckState(Qt.CheckState.Checked if enabled else Qt.CheckState.Unchecked)
         return item
 
-    def _append_scenario_row(self, values: list[str | bool]) -> None:
+    def _append_scenario_row(self, values: list[str | bool], *, row_id: int | None = None) -> int:
+        if row_id is None:
+            row_id = self._next_scenario_row_id()
         row = self.scenario_table.rowCount()
         self.scenario_table.insertRow(row)
         for column, value in enumerate(values):
             if column == 0:
-                self.scenario_table.setItem(row, column, self._enabled_item(bool(value)))
+                item = self._enabled_item(bool(value))
             else:
-                self.scenario_table.setItem(row, column, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(str(value))
+            item.setData(Qt.ItemDataRole.UserRole, row_id)
+            self.scenario_table.setItem(row, column, item)
         self._sync_target_cell(row)
         self._sync_frequency_cell(row)
+        return row_id
+
+    def _next_scenario_row_id(self) -> int:
+        row_id = self._scenario_row_id_counter
+        self._scenario_row_id_counter += 1
+        return row_id
+
+    def _scenario_row_id(self, row: int) -> int | None:
+        item = self.scenario_table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
+    def _selected_scenario_row_id(self) -> int | None:
+        row = self.scenario_table.currentRow()
+        if row < 0:
+            return None
+        return self._scenario_row_id(row)
+
+    def _focus_scenario_row(self, row_id: int | None) -> None:
+        if row_id is None:
+            return
+        for row in range(self.scenario_table.rowCount()):
+            if self._scenario_row_id(row) != row_id:
+                continue
+            self.scenario_table.selectRow(row)
+            focus_column = 1 if self.scenario_table.columnCount() > 1 else 0
+            self.scenario_table.setCurrentCell(row, focus_column)
+            item = self.scenario_table.item(row, focus_column)
+            if item is not None:
+                self.scenario_table.scrollToItem(item, QTableWidget.ScrollHint.PositionAtCenter)
+            self.scenario_table.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
+
+    def _scenario_row_values(self, row: int) -> list[str | bool]:
+        return [
+            self._scenario_enabled(row),
+            self._scenario_value(row, 1),
+            self._scenario_value(row, 2),
+            self._scenario_value(row, 3),
+            self._scenario_value(row, 4),
+            self._scenario_value(row, 5),
+            self._scenario_value(row, 6),
+            self._scenario_value(row, 7),
+            self._scenario_value(row, 8),
+        ]
+
+    def _scenario_date_sort_key(self, value: str, *, ascending: bool) -> tuple[int, int]:
+        if not value:
+            return (1, 0)
+        try:
+            ordinal = date.fromisoformat(value).toordinal()
+        except ValueError:
+            return (1, 0)
+        return (0, ordinal if ascending else -ordinal)
+
+    def _scenario_category_sort_key(self, value: str, *, ascending: bool) -> tuple[int, str]:
+        normalized = value.strip().casefold()
+        if not normalized:
+            return (1, "")
+        return (0, normalized if ascending else "".join(chr(0x10FFFF - ord(char)) for char in normalized))
+
+    def _sort_scenario_by_category(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                self._scenario_category_sort_key(str(row[1][self.SCENARIO_CATEGORY_COLUMN]), ascending=ascending),
+                row[0],
+            ),
+        )
+
+    def _sort_scenario_by_start_date(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                self._scenario_date_sort_key(str(row[1][self.SCENARIO_START_COLUMN]), ascending=ascending),
+                row[0],
+            ),
+        )
+
+    def _sort_scenario_by_end_date(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                self._scenario_date_sort_key(str(row[1][self.SCENARIO_END_COLUMN]), ascending=ascending),
+                row[0],
+            ),
+        )
+
+    def _sort_scenario_table(self, *, select_row_id: int | None = None) -> None:
+        if self._scenario_sort_column not in {
+            self.SCENARIO_CATEGORY_COLUMN,
+            self.SCENARIO_START_COLUMN,
+            self.SCENARIO_END_COLUMN,
+        }:
+            if select_row_id is not None:
+                self._focus_scenario_row(select_row_id)
+            return
+
+        rows = [
+            (self._scenario_row_id(row), self._scenario_row_values(row))
+            for row in range(self.scenario_table.rowCount())
+        ]
+
+        if self._scenario_sort_column == self.SCENARIO_CATEGORY_COLUMN:
+            ordered_rows = self._sort_scenario_by_category(rows, ascending=self._scenario_sort_ascending)
+        elif self._scenario_sort_column == self.SCENARIO_START_COLUMN:
+            ordered_rows = self._sort_scenario_by_start_date(rows, ascending=self._scenario_sort_ascending)
+        else:
+            ordered_rows = self._sort_scenario_by_end_date(rows, ascending=self._scenario_sort_ascending)
+
+        previous_suspend = self._suspend_change_tracking
+        self._suspend_change_tracking = True
+        try:
+            self.scenario_table.setRowCount(0)
+            for row_id, values in ordered_rows:
+                self._append_scenario_row(values, row_id=row_id)
+        finally:
+            self._suspend_change_tracking = previous_suspend
+
+        self._focus_scenario_row(select_row_id)
+
+    def _update_scenario_sort_indicator(self) -> None:
+        header = self.scenario_table.horizontalHeader()
+        if self._scenario_sort_column is None:
+            return
+        header.setSortIndicator(
+            self._scenario_sort_column,
+            Qt.SortOrder.AscendingOrder if self._scenario_sort_ascending else Qt.SortOrder.DescendingOrder,
+        )
 
     def _sync_target_cell(self, row: int) -> None:
         item = self.scenario_table.item(row, 4)
@@ -758,22 +1218,25 @@ class PlannerWindow(QMainWindow):
     def add_recurring_flow(self) -> None:
         self._suspend_change_tracking = True
         try:
-            self._append_scenario_row(
+            row_id = self._append_scenario_row(
                 [True, "RecurringFlow", "general", "0", "cash", "monthly", self.start_month_edit.text(), "", "0.0"]
             )
         finally:
             self._suspend_change_tracking = False
+        self._sort_scenario_table(select_row_id=row_id)
         self._mark_dirty()
         self.refresh_timeline()
 
     def add_one_off_event(self) -> None:
         self._suspend_change_tracking = True
         try:
-            self._append_scenario_row(
+            row_id = self._append_scenario_row(
                 [True, "OneOffEvent", "general", "0", "cash", "", self.start_month_edit.text(), "", ""]
             )
         finally:
             self._suspend_change_tracking = False
+        self._sort_scenario_table(select_row_id=row_id)
+        self._focus_scenario_row(row_id)
         self._mark_dirty()
         self.refresh_timeline()
 
@@ -973,6 +1436,8 @@ class PlannerWindow(QMainWindow):
         self.current_file = Path(path)
         self.settings_store.set_last_scenario_path(self.current_file)
         self._set_dirty(False)
+        self._sort_scenario_table(select_row_id=self._selected_scenario_row_id())
+        self._update_scenario_sort_indicator()
         self.refresh_timeline()
         self.run_simulation()
         return True
@@ -983,6 +1448,7 @@ class PlannerWindow(QMainWindow):
         except Exception:
             self.timeline_widget.set_timeline(None, None, [])
             self.balance_timeline_widget.set_timeline(None, None, [])
+            self.event_timeline_widget.set_timeline(None, None, [])
             return
 
         plan_end = add_months(plan.start_month, max(plan.simulation_months() - 1, 0))
@@ -991,11 +1457,13 @@ class PlannerWindow(QMainWindow):
         except Exception:
             self.timeline_widget.set_timeline(None, None, [])
             self.balance_timeline_widget.set_timeline(None, None, [])
+            self.event_timeline_widget.set_timeline(None, None, [])
             return
 
         scenario_series, balance_series = self._chart_series(plan, result, plan_end)
         self.timeline_widget.set_timeline(plan.start_month, plan_end, scenario_series)
         self.balance_timeline_widget.set_timeline(plan.start_month, plan_end, balance_series)
+        self.event_timeline_widget.set_timeline(plan.start_month, plan_end, self._event_timeline_items(plan, plan_end))
         self._update_chart_container_size()
 
     def _chart_series(self, plan: Plan, result, plan_end: date) -> tuple[list[ChartSeries], list[ChartSeries]]:
@@ -1083,6 +1551,32 @@ class PlannerWindow(QMainWindow):
                 if effective_end >= flow.starts_on:
                     effective_flows.append((flow, effective_end))
         return effective_flows
+
+    def _event_timeline_items(self, plan: Plan, plan_end: date) -> list[EventTimelineItem]:
+        items: list[EventTimelineItem] = []
+        for flow, effective_end in self._effective_recurring_flows(plan, plan_end):
+            items.append(
+                EventTimelineItem(
+                    name=flow.display_label,
+                    start=flow.starts_on,
+                    end=effective_end,
+                    color=QColor("#2f8f63") if flow.target == FlowTarget.PORTFOLIO else QColor("#2e6ea6"),
+                    item_type="recurring",
+                )
+            )
+        for event in plan.one_off_events:
+            if not event.enabled:
+                continue
+            items.append(
+                EventTimelineItem(
+                    name=event.display_label,
+                    start=event.occurs_on,
+                    end=event.occurs_on,
+                    color=QColor("#d9822b"),
+                    item_type="one_off",
+                )
+            )
+        return sorted(items, key=lambda item: (item.start, item.end, item.name))
 
     def _update_chart_container_size(self) -> None:
         title_heights = self.scenario_chart_title.sizeHint().height() + self.balance_chart_title.sizeHint().height()
