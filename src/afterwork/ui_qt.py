@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QSplitter,
     QSizePolicy,
     QStyle,
     QStyleOptionViewItem,
@@ -633,7 +634,7 @@ class PlannerWindow(QMainWindow):
         self.autosave_timer.setSingleShot(True)
         self.autosave_timer.setInterval(self.AUTOSAVE_DELAY_MS)
         self.autosave_timer.timeout.connect(self._autosave_current_plan)
-        self.setWindowTitle("Afterwork Planner")
+        self.setWindowTitle("Afterwork Planner[*]")
         self.resize(1500, 900)
 
         root = QWidget()
@@ -655,18 +656,46 @@ class PlannerWindow(QMainWindow):
         self.top_controls_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         root_layout.addWidget(self.top_controls_panel)
 
-        self.scenario_panel = self._build_scenario_panel()
-        self.scenario_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        root_layout.addWidget(self.scenario_panel)
+        self.body_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.body_splitter.setHandleWidth(10)
+        self.body_splitter.setStyleSheet(
+            """
+            QSplitter::handle {
+                background-color: #b8c4d3;
+                border-top: 1px solid #8fa1b6;
+                border-bottom: 1px solid #8fa1b6;
+            }
+            QSplitter::handle:hover {
+                background-color: #9fb0c4;
+            }
+            """
+        )
+        root_layout.addWidget(self.body_splitter, 1)
 
-        self.timeline_panel = self._build_timeline_panel()
-        root_layout.addWidget(self.timeline_panel, 4)
+        middle_content = QWidget()
+        middle_layout = QVBoxLayout(middle_content)
+        middle_layout.setContentsMargins(0, 0, 0, 0)
+        middle_layout.setSpacing(12)
+
+        self.scenario_panel = self._build_scenario_panel()
+        middle_layout.addWidget(self.scenario_panel, 1)
 
         self.results_panel = self._build_results_panel()
-        root_layout.addWidget(self.results_panel, 1)
+        middle_layout.addWidget(self.results_panel)
+
+        self.middle_scroll = QScrollArea()
+        self.middle_scroll.setWidgetResizable(True)
+        self.middle_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.middle_scroll.setWidget(middle_content)
+        self.body_splitter.addWidget(self.middle_scroll)
+
+        self.timeline_panel = self._build_timeline_panel()
+        self.body_splitter.addWidget(self.timeline_panel)
+        self.body_splitter.setStretchFactor(0, 2)
+        self.body_splitter.setStretchFactor(1, 1)
 
         self._connect_refresh_signals()
-        QTimer.singleShot(0, self._update_collapsible_panel_layout)
+        QTimer.singleShot(0, self._set_default_body_splitter_sizes)
         self.refresh_timeline()
         self.run_simulation()
         self._set_dirty(False)
@@ -770,6 +799,7 @@ class PlannerWindow(QMainWindow):
         self.scenario_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.scenario_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.scenario_table.verticalHeader().setVisible(False)
+        self.scenario_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         header = self.scenario_table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionsClickable(True)
@@ -841,7 +871,8 @@ class PlannerWindow(QMainWindow):
         table_toolbar.addStretch()
         scenario_table_layout.addLayout(table_toolbar)
         scenario_table_layout.addWidget(self.scenario_table)
-        layout.addWidget(CollapsibleSection("Event Table", scenario_table_container, expanded=True))
+        self.event_table_section = CollapsibleSection("Event Table", scenario_table_container, expanded=True)
+        layout.addWidget(self.event_table_section, 1)
 
         self.event_timeline_widget = EventTimelineWidget()
         self.event_timeline_frame = QFrame()
@@ -859,7 +890,8 @@ class PlannerWindow(QMainWindow):
         self.event_timeline_scroll.setWidget(self.event_timeline_widget)
         self.event_timeline_scroll.horizontalScrollBar().setSingleStep(self.event_timeline_widget.MONTH_WIDTH * 2)
         event_timeline_layout.addWidget(self.event_timeline_scroll)
-        layout.addWidget(CollapsibleSection("Event Timeline", self.event_timeline_frame, expanded=True))
+        self.event_timeline_section = CollapsibleSection("Event Timeline", self.event_timeline_frame, expanded=False)
+        layout.addWidget(self.event_timeline_section)
 
         return panel
 
@@ -868,6 +900,10 @@ class PlannerWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 4, 0, 0)
         layout.setSpacing(10)
+
+        title = QLabel("Value Timeline")
+        title.setContentsMargins(10, 6, 10, 0)
+        layout.addWidget(title)
 
         self.chart_container = QWidget()
         self.chart_layout = QVBoxLayout(self.chart_container)
@@ -906,15 +942,7 @@ class PlannerWindow(QMainWindow):
         self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.timeline_scroll.setWidget(self.chart_container)
         self.timeline_scroll.horizontalScrollBar().setSingleStep(self.timeline_widget.MONTH_WIDTH * 2)
-        timeline_content = QWidget()
-        timeline_content_layout = QVBoxLayout(timeline_content)
-        timeline_content_layout.setContentsMargins(0, 4, 0, 4)
-        timeline_content_layout.setSpacing(10)
-        timeline_content_layout.addWidget(self.timeline_scroll)
-
-        self.timeline_section = CollapsibleSection("Value Timeline", timeline_content, expanded=True)
-        self.timeline_section.expanded_changed.connect(self._on_timeline_section_toggled)
-        layout.addWidget(self.timeline_section)
+        layout.addWidget(self.timeline_scroll)
         return panel
 
     def _build_results_panel(self) -> QWidget:
@@ -942,32 +970,14 @@ class PlannerWindow(QMainWindow):
         layout.addWidget(self.results_section)
         return panel
 
-    def _set_collapsible_panel_state(self, panel: QWidget, section: CollapsibleSection, expanded: bool) -> None:
-        if expanded:
-            panel.setMinimumHeight(0)
-            panel.setMaximumHeight(16_777_215)
-            panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        else:
-            margins = panel.layout().contentsMargins()
-            collapsed_height = section.maximumHeight() + margins.top() + margins.bottom()
-            panel.setMinimumHeight(collapsed_height)
-            panel.setMaximumHeight(collapsed_height)
-            panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-
-    def _update_collapsible_panel_layout(self) -> None:
-        timeline_expanded = self.timeline_section.content.isVisible()
-        results_expanded = self.results_section.content.isVisible()
-        self._set_collapsible_panel_state(self.timeline_panel, self.timeline_section, timeline_expanded)
-        self._set_collapsible_panel_state(self.results_panel, self.results_section, results_expanded)
-        self.timeline_panel.updateGeometry()
-        self.results_panel.updateGeometry()
-        self.centralWidget().layout().activate()
-
-    def _on_timeline_section_toggled(self, _expanded: bool) -> None:
-        self._update_collapsible_panel_layout()
+    def _set_default_body_splitter_sizes(self) -> None:
+        total_height = max(self.body_splitter.height(), 1)
+        timeline_height = max(total_height // 3, 180)
+        self.body_splitter.setSizes([max(total_height - timeline_height, 0), timeline_height])
 
     def _on_results_section_toggled(self, _expanded: bool) -> None:
-        self._update_collapsible_panel_layout()
+        self.results_panel.updateGeometry()
+        self.middle_scroll.widget().adjustSize()
 
     def _connect_refresh_signals(self) -> None:
         self.scenario_table.itemChanged.connect(self._on_scenario_table_changed)
@@ -1598,8 +1608,7 @@ class PlannerWindow(QMainWindow):
 
     def _update_window_title(self) -> None:
         file_name = self.current_file.name if self.current_file is not None else "No scenario loaded"
-        suffix = " *" if self.is_dirty else ""
-        self.setWindowTitle(f"Afterwork Planner - {file_name}{suffix}")
+        self.setWindowTitle(f"Afterwork Planner - {file_name}[*]")
 
     def _save_plan_to_path(self, plan: Plan, path: Path, *, save_as_current: bool, show_errors: bool = True) -> bool:
         try:
