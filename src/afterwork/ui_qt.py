@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, Qt
-from PySide6.QtGui import QColor, QBrush, QFontMetrics, QPainter, QPen
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QColor, QBrush, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
@@ -109,21 +109,16 @@ class TimelineWidget(QWidget):
         self.plan_start: date | None = None
         self.plan_end: date | None = None
         self.series: list[ChartSeries] = []
-        self.visible_x_start = 0
-        self.visible_x_end = 0
+        self._cached_pixmap: QPixmap | None = None
 
     def set_timeline(self, plan_start: date | None, plan_end: date | None, series: list[ChartSeries]) -> None:
         self.plan_start = plan_start
         self.plan_end = plan_end
         self.series = series
+        self._cached_pixmap = None
         size = self.sizeHint()
         self.setMinimumSize(size)
         self.resize(size)
-        self.update()
-
-    def set_visible_window(self, visible_x_start: int, viewport_width: int) -> None:
-        self.visible_x_start = visible_x_start
-        self.visible_x_end = visible_x_start + viewport_width
         self.update()
 
     def sizeHint(self) -> QSize:
@@ -133,18 +128,34 @@ class TimelineWidget(QWidget):
         return QSize(width, height)
 
     def paintEvent(self, _event) -> None:
+        self._ensure_cache()
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#ffffff"))
+        if self._cached_pixmap is not None:
+            painter.drawPixmap(0, 0, self._cached_pixmap)
+
+    def resizeEvent(self, event) -> None:
+        self._cached_pixmap = None
+        super().resizeEvent(event)
+
+    def _ensure_cache(self) -> None:
+        if self._cached_pixmap is not None and self._cached_pixmap.size() == self.size():
+            return
+
+        pixmap = QPixmap(self.size())
+        pixmap.fill(QColor("#ffffff"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         if self.plan_start is None or self.plan_end is None:
             painter.setPen(QColor("#666666"))
             painter.drawText(self.rect().adjusted(16, 16, -16, -16), "Timeline is unavailable until the scenario dates are valid.")
-            return
+        else:
+            self._draw_axes(painter)
+            self._draw_quarter_grid(painter)
+            self._draw_series(painter)
 
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self._draw_axes(painter)
-        self._draw_quarter_grid(painter)
-        self._draw_series(painter)
+        painter.end()
+        self._cached_pixmap = pixmap
 
     def _timeline_months(self) -> int:
         if self.plan_start is None or self.plan_end is None:
@@ -167,39 +178,14 @@ class TimelineWidget(QWidget):
 
     def _value_range(self) -> tuple[float, float]:
         values = [0.0]
-        visible_values = self._visible_values()
-        if visible_values:
-            values.extend(visible_values)
-        else:
-            for series in self.series:
-                values.extend(point.value for point in series.points)
+        for series in self.series:
+            values.extend(point.value for point in series.points)
         minimum = min(values)
         maximum = max(values)
         if minimum == maximum:
             padding = max(abs(minimum) * 0.1, 1.0)
             return minimum - padding, maximum + padding
         return minimum, maximum
-
-    def _visible_values(self) -> list[float]:
-        if self.visible_x_end <= self.visible_x_start:
-            return []
-        visible_start = self._snap_visible_x(self.visible_x_start)
-        visible_end = self._snap_visible_x(self.visible_x_end)
-        values: list[float] = []
-        for series in self.series:
-            for point in series.points:
-                x = self._x_for_month(point.month, center=True)
-                if visible_start <= x <= visible_end:
-                    values.append(point.value)
-        return values
-
-    def _snap_visible_x(self, x_value: int) -> int:
-        if x_value <= self.LEFT_MARGIN:
-            return self.LEFT_MARGIN
-        quarter_width = self.MONTH_WIDTH * 3
-        relative = x_value - self.LEFT_MARGIN
-        snapped = (relative // quarter_width) * quarter_width
-        return self.LEFT_MARGIN + snapped
 
     def _y_for_value(self, value: float) -> int:
         minimum, maximum = self._value_range()
@@ -442,8 +428,6 @@ class PlannerWindow(QMainWindow):
         self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.timeline_scroll.setWidget(self.chart_container)
         self.timeline_scroll.horizontalScrollBar().setSingleStep(self.timeline_widget.MONTH_WIDTH * 2)
-        self.timeline_scroll.horizontalScrollBar().valueChanged.connect(self._sync_chart_viewport)
-        self.timeline_scroll.viewport().installEventFilter(self)
         layout.addWidget(self.timeline_scroll)
         return panel
 
@@ -712,7 +696,6 @@ class PlannerWindow(QMainWindow):
         self.timeline_widget.set_timeline(plan.start_month, plan_end, scenario_series)
         self.balance_timeline_widget.set_timeline(plan.start_month, plan_end, balance_series)
         self._update_chart_container_size()
-        self._sync_chart_viewport()
 
     def _chart_series(self, plan: Plan, result, plan_end: date) -> tuple[list[ChartSeries], list[ChartSeries]]:
         scenario_series: list[ChartSeries] = []
@@ -808,20 +791,6 @@ class PlannerWindow(QMainWindow):
         total_height = title_heights + chart_height + spacing * 3 + 8
         self.chart_container.setMinimumSize(chart_width, total_height)
         self.chart_container.resize(chart_width, total_height)
-
-    def _sync_chart_viewport(self) -> None:
-        if not hasattr(self, "timeline_scroll"):
-            return
-        self.timeline_scroll.horizontalScrollBar().setPageStep(self.timeline_scroll.viewport().width())
-        visible_x_start = self.timeline_scroll.horizontalScrollBar().value()
-        viewport_width = self.timeline_scroll.viewport().width()
-        self.timeline_widget.set_visible_window(visible_x_start, viewport_width)
-        self.balance_timeline_widget.set_visible_window(visible_x_start, viewport_width)
-
-    def eventFilter(self, watched, event) -> bool:
-        if watched is self.timeline_scroll.viewport() and event.type() == QEvent.Type.Resize:
-            self._sync_chart_viewport()
-        return super().eventFilter(watched, event)
 
 
 def main() -> None:
