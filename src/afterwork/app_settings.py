@@ -7,8 +7,6 @@ from typing import Any
 
 SETTINGS_DIR = Path.home() / ".afterwork"
 SETTINGS_PATH = SETTINGS_DIR / "settings.json"
-
-
 class SettingsStore:
     def __init__(self, path: Path = SETTINGS_PATH) -> None:
         self.path = path
@@ -42,3 +40,7 @@ class SettingsStore:
         if not raw_path:
             return None
         return Path(raw_path)
+
+    def get_autosave_path(self) -> Path:
+        self.ensure_exists()
+        return self.path.parent / "autosave.json"

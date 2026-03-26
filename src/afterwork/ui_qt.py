@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QBrush, QFontMetrics, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QBrush, QCloseEvent, QColor, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
@@ -61,6 +62,8 @@ RESULT_HEADERS = [
     "Total Value",
     "Flows",
 ]
+FREQUENCY_OPTIONS = [frequency.value for frequency in Frequency]
+TARGET_OPTIONS = [target.value for target in FlowTarget]
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,47 @@ class TableTextDelegate(QStyledItemDelegate):
             option.widget,
         )
         editor.setGeometry(text_rect.adjusted(self.EDITOR_X_OFFSET, self.EDITOR_Y_OFFSET, 0, 0))
+
+
+class ScenarioTableDelegate(TableTextDelegate):
+    ITEM_TYPE_COLUMN = 1
+    TARGET_COLUMN = 4
+    FREQUENCY_COLUMN = 5
+
+    def createEditor(self, parent, option, index):
+        if index.column() == self.TARGET_COLUMN:
+            editor = QComboBox(parent)
+            editor.addItems(TARGET_OPTIONS)
+            editor.setFrame(False)
+            return editor
+
+        if index.column() == self.FREQUENCY_COLUMN:
+            item_type = (index.siblingAtColumn(self.ITEM_TYPE_COLUMN).data() or "").strip()
+            if item_type != "RecurringFlow":
+                return None
+
+            editor = QComboBox(parent)
+            editor.addItems(FREQUENCY_OPTIONS)
+            editor.setFrame(False)
+            return editor
+
+        return super().createEditor(parent, option, index)
+
+    def setEditorData(self, editor, index) -> None:
+        if isinstance(editor, QComboBox):
+            value = (index.data() or "").strip()
+            combo_index = editor.findText(value)
+            editor.setCurrentIndex(max(combo_index, 0))
+            return
+
+        super().setEditorData(editor, index)
+
+    def setModelData(self, editor, model, index) -> None:
+        if isinstance(editor, QComboBox):
+            model.setData(index, editor.currentText())
+            return
+
+        super().setModelData(editor, model, index)
 
 
 class TimelineWidget(QWidget):
@@ -383,12 +427,20 @@ class TimelineWidget(QWidget):
 class PlannerWindow(QMainWindow):
     TOOLBAR_BUTTON_WIDTH = 118
     TOOLBAR_BUTTON_HEIGHT = 36
+    AUTOSAVE_DELAY_MS = 1200
 
     def __init__(self, settings_store: SettingsStore) -> None:
         super().__init__()
         self.settings_store = settings_store
         self.current_file: Path | None = None
         self.current_result = None
+        self.is_dirty = False
+        self._suspend_change_tracking = False
+        self.autosave_path = self.settings_store.get_autosave_path()
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.setSingleShot(True)
+        self.autosave_timer.setInterval(self.AUTOSAVE_DELAY_MS)
+        self.autosave_timer.timeout.connect(self._autosave_current_plan)
         self.setWindowTitle("Afterwork Planner")
         self.resize(1500, 900)
 
@@ -417,6 +469,7 @@ class PlannerWindow(QMainWindow):
         self._connect_refresh_signals()
         self.refresh_timeline()
         self.run_simulation()
+        self._set_dirty(False)
 
     def _build_scenario_panel(self) -> QWidget:
         panel = QWidget()
@@ -476,6 +529,7 @@ class PlannerWindow(QMainWindow):
             ("Delete Row", self.delete_selected_row),
             ("Run Simulation", self.run_simulation),
             ("Save", self.save_plan),
+            ("Save As", self.save_plan_as),
             ("Load", self.load_plan),
         ]:
             button = QPushButton(label)
@@ -506,11 +560,21 @@ class PlannerWindow(QMainWindow):
 
         self.scenario_table = QTableWidget(0, len(SCENARIO_HEADERS))
         self.scenario_table.setHorizontalHeaderLabels(SCENARIO_HEADERS)
-        self.scenario_table.setItemDelegate(TableTextDelegate(self.scenario_table))
+        self.scenario_table.setItemDelegate(ScenarioTableDelegate(self.scenario_table))
         self.scenario_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.scenario_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.scenario_table.horizontalHeader().setStretchLastSection(True)
         self.scenario_table.verticalHeader().setVisible(False)
+        header = self.scenario_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        self.scenario_table.setColumnWidth(0, 64)
+        self.scenario_table.setColumnWidth(1, 110)
+        self.scenario_table.setColumnWidth(2, 140)
+        self.scenario_table.setColumnWidth(3, 90)
+        self.scenario_table.setColumnWidth(4, 90)
+        self.scenario_table.setColumnWidth(5, 100)
+        self.scenario_table.setColumnWidth(6, 110)
+        self.scenario_table.setColumnWidth(7, 110)
+        self.scenario_table.setColumnWidth(8, 110)
         self.scenario_table.setStyleSheet(
             """
             QTableWidget::item:selected {
@@ -599,10 +663,37 @@ class PlannerWindow(QMainWindow):
         return panel
 
     def _connect_refresh_signals(self) -> None:
-        self.scenario_table.itemChanged.connect(self.refresh_timeline)
-        self.start_month_edit.editingFinished.connect(self.refresh_timeline)
-        self.birthday_edit.editingFinished.connect(self.refresh_timeline)
-        self.target_age_spin.valueChanged.connect(self.refresh_timeline)
+        self.scenario_table.itemChanged.connect(self._on_scenario_table_changed)
+        self.start_month_edit.editingFinished.connect(self._on_plan_input_changed)
+        self.birthday_edit.editingFinished.connect(self._on_plan_input_changed)
+        self.target_age_spin.valueChanged.connect(self._on_plan_input_changed)
+        self.starting_cash_spin.valueChanged.connect(self._on_plan_input_changed)
+        self.portfolio_start_spin.valueChanged.connect(self._on_plan_input_changed)
+        self.portfolio_growth_spin.valueChanged.connect(self._on_plan_input_changed)
+
+    def _on_scenario_table_changed(self, _item: QTableWidgetItem) -> None:
+        if self._suspend_change_tracking:
+            return
+        if _item.column() == 1:
+            self._sync_frequency_cell(_item.row())
+        self._mark_dirty()
+        self.refresh_timeline()
+
+    def _on_plan_input_changed(self, *_args) -> None:
+        if self._suspend_change_tracking:
+            return
+        self._mark_dirty()
+        self.refresh_timeline()
+
+    def _mark_dirty(self) -> None:
+        self._set_dirty(True)
+        self.autosave_timer.start()
+
+    def _set_dirty(self, dirty: bool) -> None:
+        self.is_dirty = dirty
+        self.setWindowModified(dirty)
+        self._update_scenario_name()
+        self._update_window_title()
 
     def _enabled_item(self, enabled: bool) -> QTableWidgetItem:
         item = QTableWidgetItem()
@@ -622,23 +713,75 @@ class PlannerWindow(QMainWindow):
                 self.scenario_table.setItem(row, column, self._enabled_item(bool(value)))
             else:
                 self.scenario_table.setItem(row, column, QTableWidgetItem(str(value)))
+        self._sync_target_cell(row)
+        self._sync_frequency_cell(row)
+
+    def _sync_target_cell(self, row: int) -> None:
+        item = self.scenario_table.item(row, 4)
+        if item is None:
+            item = QTableWidgetItem("")
+            self.scenario_table.setItem(row, 4, item)
+
+        flags = item.flags() | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        previous_suspend = self._suspend_change_tracking
+        self._suspend_change_tracking = True
+        try:
+            if item.text().strip() not in TARGET_OPTIONS:
+                item.setText(FlowTarget.CASH.value)
+            item.setFlags(flags | Qt.ItemFlag.ItemIsEditable)
+        finally:
+            self._suspend_change_tracking = previous_suspend
+
+    def _sync_frequency_cell(self, row: int) -> None:
+        item = self.scenario_table.item(row, 5)
+        if item is None:
+            item = QTableWidgetItem("")
+            self.scenario_table.setItem(row, 5, item)
+
+        is_recurring_flow = self._scenario_value(row, 1) == "RecurringFlow"
+        flags = item.flags() | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+        previous_suspend = self._suspend_change_tracking
+        self._suspend_change_tracking = True
+        try:
+            if is_recurring_flow:
+                if item.text().strip() not in FREQUENCY_OPTIONS:
+                    item.setText(Frequency.MONTHLY.value)
+                item.setFlags(flags | Qt.ItemFlag.ItemIsEditable)
+            else:
+                if item.text():
+                    item.setText("")
+                item.setFlags(flags & ~Qt.ItemFlag.ItemIsEditable)
+        finally:
+            self._suspend_change_tracking = previous_suspend
 
     def add_recurring_flow(self) -> None:
-        self._append_scenario_row(
-            [True, "RecurringFlow", "general", "0", "cash", "monthly", self.start_month_edit.text(), "", "0.0"]
-        )
+        self._suspend_change_tracking = True
+        try:
+            self._append_scenario_row(
+                [True, "RecurringFlow", "general", "0", "cash", "monthly", self.start_month_edit.text(), "", "0.0"]
+            )
+        finally:
+            self._suspend_change_tracking = False
+        self._mark_dirty()
         self.refresh_timeline()
 
     def add_one_off_event(self) -> None:
-        self._append_scenario_row(
-            [True, "OneOffEvent", "general", "0", "cash", "", self.start_month_edit.text(), "", ""]
-        )
+        self._suspend_change_tracking = True
+        try:
+            self._append_scenario_row(
+                [True, "OneOffEvent", "general", "0", "cash", "", self.start_month_edit.text(), "", ""]
+            )
+        finally:
+            self._suspend_change_tracking = False
+        self._mark_dirty()
         self.refresh_timeline()
 
     def delete_selected_row(self) -> None:
         row = self.scenario_table.currentRow()
         if row >= 0:
             self.scenario_table.removeRow(row)
+            self._mark_dirty()
             self.refresh_timeline()
 
     def _scenario_value(self, row: int, column: int) -> str:
@@ -750,17 +893,29 @@ class PlannerWindow(QMainWindow):
             QMessageBox.critical(self, "Save error", str(exc))
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Save Scenario", "", "JSON files (*.json)")
+        if self.current_file is not None:
+            self._save_plan_to_path(plan, self.current_file, save_as_current=True)
+            return
+
+        self.save_plan_as()
+
+    def save_plan_as(self) -> None:
+        try:
+            plan = self._build_plan()
+        except Exception as exc:
+            QMessageBox.critical(self, "Save error", str(exc))
+            return
+
+        initial_path = str(self.current_file) if self.current_file is not None else ""
+        path, _ = QFileDialog.getSaveFileName(self, "Save Scenario", initial_path, "JSON files (*.json)")
         if not path:
             return
 
-        plan_to_json(plan, path)
-        self.current_file = Path(path)
-        self.settings_store.set_last_scenario_path(self.current_file)
-        self._update_scenario_name()
-        self.setWindowTitle(f"Afterwork Planner - {self.current_file}")
+        self._save_plan_to_path(plan, Path(path), save_as_current=True)
 
     def load_plan(self) -> None:
+        if not self._confirm_discard_unsaved_changes():
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Load Scenario", "", "JSON files (*.json)")
         if not path:
             return
@@ -774,47 +929,50 @@ class PlannerWindow(QMainWindow):
             QMessageBox.critical(self, "Load error", str(exc))
             return False
 
-        self.start_month_edit.setText(plan.start_month.isoformat())
-        self.birthday_edit.setText(plan.person.birth_date.isoformat())
-        self.target_age_spin.setValue(plan.person.target_age_years)
-        self.starting_cash_spin.setValue(plan.starting_cash_balance)
-        self.portfolio_start_spin.setValue(plan.portfolio.starting_balance)
-        self.portfolio_growth_spin.setValue(plan.portfolio.annual_growth_rate * 100.0)
+        self._suspend_change_tracking = True
+        try:
+            self.start_month_edit.setText(plan.start_month.isoformat())
+            self.birthday_edit.setText(plan.person.birth_date.isoformat())
+            self.target_age_spin.setValue(plan.person.target_age_years)
+            self.starting_cash_spin.setValue(plan.starting_cash_balance)
+            self.portfolio_start_spin.setValue(plan.portfolio.starting_balance)
+            self.portfolio_growth_spin.setValue(plan.portfolio.annual_growth_rate * 100.0)
 
-        self.scenario_table.setRowCount(0)
-        for flow in plan.recurring_flows:
-            self._append_scenario_row(
-                [
-                    flow.enabled,
-                    "RecurringFlow",
-                    flow.category,
-                    str(flow.amount),
-                    flow.target.value,
-                    flow.frequency.value,
-                    flow.starts_on.isoformat(),
-                    flow.ends_on.isoformat() if flow.ends_on else "",
-                    str(flow.annual_adjustment_rate * 100.0),
-                ]
-            )
-        for event in plan.one_off_events:
-            self._append_scenario_row(
-                [
-                    event.enabled,
-                    "OneOffEvent",
-                    event.category,
-                    str(event.amount),
-                    event.target.value,
-                    "",
-                    event.occurs_on.isoformat(),
-                    "",
-                    "",
-                ]
-            )
+            self.scenario_table.setRowCount(0)
+            for flow in plan.recurring_flows:
+                self._append_scenario_row(
+                    [
+                        flow.enabled,
+                        "RecurringFlow",
+                        flow.category,
+                        str(flow.amount),
+                        flow.target.value,
+                        flow.frequency.value,
+                        flow.starts_on.isoformat(),
+                        flow.ends_on.isoformat() if flow.ends_on else "",
+                        str(flow.annual_adjustment_rate * 100.0),
+                    ]
+                )
+            for event in plan.one_off_events:
+                self._append_scenario_row(
+                    [
+                        event.enabled,
+                        "OneOffEvent",
+                        event.category,
+                        str(event.amount),
+                        event.target.value,
+                        "",
+                        event.occurs_on.isoformat(),
+                        "",
+                        "",
+                    ]
+                )
+        finally:
+            self._suspend_change_tracking = False
 
         self.current_file = Path(path)
         self.settings_store.set_last_scenario_path(self.current_file)
-        self._update_scenario_name()
-        self.setWindowTitle(f"Afterwork Planner - {self.current_file}")
+        self._set_dirty(False)
         self.refresh_timeline()
         self.run_simulation()
         return True
@@ -936,7 +1094,82 @@ class PlannerWindow(QMainWindow):
         self.chart_container.resize(chart_width, total_height)
 
     def _update_scenario_name(self) -> None:
-        self.scenario_name_label.setText(self.current_file.name if self.current_file is not None else "No scenario loaded")
+        if self.current_file is not None:
+            label = self.current_file.name
+        else:
+            label = "No scenario loaded"
+        if self.is_dirty:
+            label = f"* {label}"
+        self.scenario_name_label.setText(label)
+
+    def _update_window_title(self) -> None:
+        file_name = self.current_file.name if self.current_file is not None else "No scenario loaded"
+        suffix = " *" if self.is_dirty else ""
+        self.setWindowTitle(f"Afterwork Planner - {file_name}{suffix}")
+
+    def _save_plan_to_path(self, plan: Plan, path: Path, *, save_as_current: bool, show_errors: bool = True) -> bool:
+        try:
+            plan_to_json(plan, path)
+        except Exception as exc:
+            if show_errors:
+                QMessageBox.critical(self, "Save error", str(exc))
+            return False
+
+        if save_as_current:
+            self.current_file = path
+        self.settings_store.set_last_scenario_path(self.current_file if self.current_file is not None else path)
+        self._set_dirty(False)
+        return True
+
+    def _autosave_current_plan(self) -> bool:
+        if not self.is_dirty:
+            return True
+
+        try:
+            plan = self._build_plan()
+        except Exception:
+            return False
+
+        autosave_target = self.current_file if self.current_file is not None else self.autosave_path
+        if self._save_plan_to_path(
+            plan,
+            autosave_target,
+            save_as_current=self.current_file is None,
+            show_errors=False,
+        ):
+            return True
+        return False
+
+    def _confirm_discard_unsaved_changes(self) -> bool:
+        if not self.is_dirty:
+            return True
+        if self._autosave_current_plan():
+            return True
+
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Unsaved changes")
+        dialog.setText("The current scenario has unsaved changes.")
+        dialog.setInformativeText("Save before continuing?")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        dialog.setDefaultButton(QMessageBox.StandardButton.Save)
+        choice = dialog.exec()
+
+        if choice == QMessageBox.StandardButton.Save:
+            self.save_plan()
+            return not self.is_dirty
+        return choice == QMessageBox.StandardButton.Discard
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.autosave_timer.stop()
+        if self._confirm_discard_unsaved_changes():
+            event.accept()
+            return
+        event.ignore()
 
 
 def main() -> None:
