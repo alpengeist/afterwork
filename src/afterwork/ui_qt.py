@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import argparse
+import math
 import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QBrush, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,10 +44,11 @@ from afterwork import (
     plan_from_json,
     plan_to_json,
 )
+from afterwork.app_settings import SettingsStore
 from afterwork.domain import add_months, month_index
 
 
-SCENARIO_HEADERS = ["On", "Type", "Name", "Amount", "Target", "Frequency", "Start", "End", "Category", "Yearly Adj. %"]
+SCENARIO_HEADERS = ["Active", "Type", "Category", "Amount", "Target", "Frequency", "Start", "End", "Yearly Adj. %"]
 RESULT_HEADERS = [
     "Month",
     "Age",
@@ -101,15 +104,32 @@ class TimelineWidget(QWidget):
     RIGHT_MARGIN = 170
     TOP_MARGIN = 34
     BOTTOM_MARGIN = 34
-    CHART_HEIGHT = 280
+    MIN_CHART_HEIGHT = 280
     MONTH_WIDTH = 10
-
-    def __init__(self, parent: QWidget | None = None) -> None:
+    Y_AXIS_INTERVAL_HEIGHT = 10
+    
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        y_axis_interval: float = 20_000.0,
+        y_axis_label_interval: float = 100_000.0,
+        dynamic_height: bool = True,
+        include_event_values_in_scale: bool = True,
+        pin_events_to_zero: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.plan_start: date | None = None
         self.plan_end: date | None = None
         self.series: list[ChartSeries] = []
         self._cached_pixmap: QPixmap | None = None
+        self.y_axis_interval = y_axis_interval
+        self.y_axis_label_interval = y_axis_label_interval
+        self.dynamic_height = dynamic_height
+        self.include_event_values_in_scale = include_event_values_in_scale
+        self.pin_events_to_zero = pin_events_to_zero
+        self._hover_pos: QPoint | None = None
+        self.setMouseTracking(True)
 
     def set_timeline(self, plan_start: date | None, plan_end: date | None, series: list[ChartSeries]) -> None:
         self.plan_start = plan_start
@@ -124,7 +144,7 @@ class TimelineWidget(QWidget):
     def sizeHint(self) -> QSize:
         months = self._timeline_months()
         width = self.LEFT_MARGIN + self.RIGHT_MARGIN + max(months, 1) * self.MONTH_WIDTH
-        height = self.TOP_MARGIN + self.BOTTOM_MARGIN + self.CHART_HEIGHT
+        height = self.TOP_MARGIN + self.BOTTOM_MARGIN + self._plot_height()
         return QSize(width, height)
 
     def paintEvent(self, _event) -> None:
@@ -132,6 +152,7 @@ class TimelineWidget(QWidget):
         painter = QPainter(self)
         if self._cached_pixmap is not None:
             painter.drawPixmap(0, 0, self._cached_pixmap)
+        self._draw_hover_overlay(painter, QFontMetrics(painter.font()))
 
     def resizeEvent(self, event) -> None:
         self._cached_pixmap = None
@@ -157,6 +178,19 @@ class TimelineWidget(QWidget):
         painter.end()
         self._cached_pixmap = pixmap
 
+    def mouseMoveEvent(self, event) -> None:
+        if self._is_in_plot_area(event.position().toPoint()):
+            self._hover_pos = event.position().toPoint()
+        else:
+            self._hover_pos = None
+        self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hover_pos = None
+        self.update()
+        super().leaveEvent(event)
+
     def _timeline_months(self) -> int:
         if self.plan_start is None or self.plan_end is None:
             return 1
@@ -174,18 +208,29 @@ class TimelineWidget(QWidget):
         return self.TOP_MARGIN
 
     def _plot_bottom(self) -> int:
-        return self.TOP_MARGIN + self.CHART_HEIGHT
+        return self.TOP_MARGIN + self._plot_height()
+
+    def _plot_height(self) -> int:
+        if not self.dynamic_height:
+            return self.MIN_CHART_HEIGHT
+        minimum, maximum = self._value_range()
+        intervals = max(int(round((maximum - minimum) / self.y_axis_interval)), 1)
+        return max(self.MIN_CHART_HEIGHT, intervals * self.Y_AXIS_INTERVAL_HEIGHT)
 
     def _value_range(self) -> tuple[float, float]:
         values = [0.0]
         for series in self.series:
+            if series.series_type == "event" and not self.include_event_values_in_scale:
+                continue
             values.extend(point.value for point in series.points)
         minimum = min(values)
         maximum = max(values)
-        if minimum == maximum:
-            padding = max(abs(minimum) * 0.1, 1.0)
-            return minimum - padding, maximum + padding
-        return minimum, maximum
+        interval = self.y_axis_interval
+        minimum_tick = math.floor(minimum / interval) * interval
+        maximum_tick = math.ceil(maximum / interval) * interval
+        if minimum_tick == maximum_tick:
+            maximum_tick = minimum_tick + interval
+        return minimum_tick, maximum_tick
 
     def _y_for_value(self, value: float) -> int:
         minimum, maximum = self._value_range()
@@ -198,19 +243,39 @@ class TimelineWidget(QWidget):
         painter.setPen(axis_pen)
         painter.drawLine(self.LEFT_MARGIN, self._plot_top(), self.LEFT_MARGIN, self._plot_bottom())
         painter.drawLine(self.LEFT_MARGIN, self._plot_bottom(), self.width() - self.RIGHT_MARGIN + 30, self._plot_bottom())
+        right_axis_x = self.width() - self.RIGHT_MARGIN + 30
+        painter.drawLine(right_axis_x, self._plot_top(), right_axis_x, self._plot_bottom())
 
         minimum, maximum = self._value_range()
         tick_pen = QPen(QColor("#657182"))
-        painter.setPen(tick_pen)
-        for value in [minimum, (minimum + maximum) / 2, maximum]:
+        grid_pen = QPen(QColor("#d8dde3"))
+        grid_pen.setStyle(Qt.PenStyle.DashLine)
+        major_grid_pen = QPen(QColor("#9aa7b8"))
+        major_grid_pen.setStyle(Qt.PenStyle.SolidLine)
+        tick_values: list[float] = []
+        current = minimum
+        while current <= maximum + 0.1:
+            tick_values.append(current)
+            current += self.y_axis_interval
+
+        for value in tick_values:
             y = self._y_for_value(value)
+            label_multiple = round(value / self.y_axis_label_interval)
+            is_major = abs(value - label_multiple * self.y_axis_label_interval) < 1e-9
+            painter.setPen(major_grid_pen if is_major else grid_pen)
+            painter.drawLine(self.LEFT_MARGIN, y, right_axis_x, y)
+            painter.setPen(tick_pen)
             painter.drawLine(self.LEFT_MARGIN - 5, y, self.LEFT_MARGIN, y)
-            painter.drawText(8, y + 5, f"{value:,.0f}")
+            painter.drawLine(right_axis_x, y, right_axis_x + 5, y)
+            if is_major:
+                label = f"{value:,.0f}"
+                painter.drawText(8, y + 5, label)
+                painter.drawText(right_axis_x + 8, y + 5, label)
 
         if minimum < 0 < maximum:
             zero_y = self._y_for_value(0.0)
             painter.setPen(QPen(QColor("#b8c0cb"), 1, Qt.PenStyle.DashLine))
-            painter.drawLine(self.LEFT_MARGIN, zero_y, self.width() - self.RIGHT_MARGIN + 30, zero_y)
+            painter.drawLine(self.LEFT_MARGIN, zero_y, right_axis_x, zero_y)
 
     def _draw_quarter_grid(self, painter: QPainter) -> None:
         assert self.plan_start is not None
@@ -262,14 +327,66 @@ class TimelineWidget(QWidget):
         painter.setBrush(QBrush(series.color))
         for point in series.points:
             x = self._x_for_month(point.month, center=True)
-            y = self._y_for_value(point.value)
+            y = self._y_for_value(0.0 if self.pin_events_to_zero else point.value)
             painter.drawEllipse(x - 6, y - 6, 12, 12)
-            painter.drawText(x + 10, y - 8, font_metrics.elidedText(series.name, Qt.TextElideMode.ElideRight, 180))
+            label = f"{series.name} ({point.value:,.0f})"
+            painter.drawText(x + 10, y - 8, font_metrics.elidedText(label, Qt.TextElideMode.ElideRight, 220))
+
+    def _draw_hover_overlay(self, painter: QPainter, font_metrics: QFontMetrics) -> None:
+        if self._hover_pos is None or self.plan_start is None or self.plan_end is None:
+            return
+
+        hover_text = self._hover_text(self._hover_pos)
+        text_width = font_metrics.horizontalAdvance(hover_text)
+        bubble_width = text_width + 16
+        bubble_height = font_metrics.height() + 10
+        bubble_x = self._hover_pos.x() - bubble_width // 2
+        bubble_y = self._hover_pos.y() - bubble_height - 10
+
+        if bubble_y < 4:
+            bubble_x = (self.width() - bubble_width) // 2
+            bubble_y = 4
+
+        bubble_x = max(4, min(bubble_x, self.width() - bubble_width - 4))
+        bubble_rect = QRect(bubble_x, bubble_y, bubble_width, bubble_height)
+
+        painter.setPen(QPen(QColor("#334155")))
+        painter.setBrush(QBrush(QColor(255, 255, 255, 235)))
+        painter.drawRoundedRect(bubble_rect, 6, 6)
+        painter.drawText(bubble_rect.adjusted(8, 0, -8, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter, hover_text)
+
+    def _hover_text(self, pos: QPoint) -> str:
+        month_value = self._month_for_x(pos.x())
+        y_value = self._value_for_y(pos.y())
+        return f"{month_value.isoformat()} | {y_value:,.0f}"
+
+    def _month_for_x(self, x_pos: int) -> date:
+        assert self.plan_start is not None and self.plan_end is not None
+        relative = x_pos - self.LEFT_MARGIN
+        month_offset = round(relative / self.MONTH_WIDTH)
+        month_offset = max(0, min(month_offset, self._timeline_months() - 1))
+        return add_months(self.plan_start, month_offset)
+
+    def _value_for_y(self, y_pos: int) -> float:
+        minimum, maximum = self._value_range()
+        plot_height = self._plot_bottom() - self._plot_top()
+        if plot_height <= 0:
+            return minimum
+        clamped_y = max(self._plot_top(), min(y_pos, self._plot_bottom()))
+        position = (self._plot_bottom() - clamped_y) / plot_height
+        return minimum + position * (maximum - minimum)
+
+    def _is_in_plot_area(self, pos: QPoint) -> bool:
+        return self.LEFT_MARGIN <= pos.x() <= self.width() - self.RIGHT_MARGIN + 30 and self._plot_top() <= pos.y() <= self._plot_bottom()
 
 
 class PlannerWindow(QMainWindow):
-    def __init__(self) -> None:
+    TOOLBAR_BUTTON_WIDTH = 118
+    TOOLBAR_BUTTON_HEIGHT = 36
+
+    def __init__(self, settings_store: SettingsStore) -> None:
         super().__init__()
+        self.settings_store = settings_store
         self.current_file: Path | None = None
         self.current_result = None
         self.setWindowTitle("Afterwork Planner")
@@ -278,6 +395,14 @@ class PlannerWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         root_layout = QVBoxLayout(root)
+
+        self.scenario_name_label = QLabel("No scenario loaded")
+        scenario_font = self.scenario_name_label.font()
+        scenario_font.setPointSize(scenario_font.pointSize() + 4)
+        scenario_font.setBold(True)
+        self.scenario_name_label.setFont(scenario_font)
+        self.scenario_name_label.setContentsMargins(10, 6, 10, 0)
+        root_layout.addWidget(self.scenario_name_label)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         root_layout.addWidget(splitter)
@@ -289,7 +414,6 @@ class PlannerWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
         splitter.setStretchFactor(2, 3)
 
-        self._populate_demo_data()
         self._connect_refresh_signals()
         self.refresh_timeline()
         self.run_simulation()
@@ -306,10 +430,8 @@ class PlannerWindow(QMainWindow):
 
         self.start_month_edit = QLineEdit("2026-01-01")
         self.start_month_edit.setFixedWidth(110)
-        self.current_age_spin = QSpinBox()
-        self.current_age_spin.setRange(0, 130)
-        self.current_age_spin.setValue(40)
-        self.current_age_spin.setFixedWidth(72)
+        self.birthday_edit = QLineEdit("1986-01-01")
+        self.birthday_edit.setFixedWidth(110)
         self.target_age_spin = QSpinBox()
         self.target_age_spin.setRange(0, 130)
         self.target_age_spin.setValue(95)
@@ -333,7 +455,7 @@ class PlannerWindow(QMainWindow):
 
         fields = [
             ("Start Month", self.start_month_edit),
-            ("Current Age", self.current_age_spin),
+            ("Birthday", self.birthday_edit),
             ("Target Age", self.target_age_spin),
             ("Starting Cash", self.starting_cash_spin),
             ("Starting Portfolio", self.portfolio_start_spin),
@@ -347,15 +469,36 @@ class PlannerWindow(QMainWindow):
         layout.addWidget(settings)
 
         toolbar = QHBoxLayout()
+        toolbar.setSpacing(10)
         for label, handler in [
             ("Add Flow", self.add_recurring_flow),
             ("Add Event", self.add_one_off_event),
             ("Delete Row", self.delete_selected_row),
             ("Run Simulation", self.run_simulation),
-            ("Save JSON", self.save_plan),
-            ("Load JSON", self.load_plan),
+            ("Save", self.save_plan),
+            ("Load", self.load_plan),
         ]:
             button = QPushButton(label)
+            button.setFixedSize(self.TOOLBAR_BUTTON_WIDTH, self.TOOLBAR_BUTTON_HEIGHT)
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #d8e7f5;
+                    border: 1px solid #8eabc7;
+                    border-radius: 6px;
+                    color: #16324a;
+                    font-weight: 600;
+                    padding: 6px 12px;
+                }
+                QPushButton:hover {
+                    background-color: #c8def1;
+                    border-color: #6f95bb;
+                }
+                QPushButton:pressed {
+                    background-color: #b8d1e8;
+                }
+                """
+            )
             button.clicked.connect(handler)
             toolbar.addWidget(button)
         toolbar.addStretch()
@@ -388,10 +531,6 @@ class PlannerWindow(QMainWindow):
         )
         layout.addWidget(self.scenario_table)
 
-        hint = QLabel(
-            "Recurring rows may have an end date. A later row with the same type and category still replaces the earlier row from its start month onward."
-        )
-        layout.addWidget(hint)
         return panel
 
     def _build_timeline_panel(self) -> QWidget:
@@ -412,14 +551,26 @@ class PlannerWindow(QMainWindow):
         self.scenario_chart_title.setContentsMargins(10, 0, 10, 0)
         self.chart_layout.addWidget(self.scenario_chart_title)
 
-        self.timeline_widget = TimelineWidget()
+        self.timeline_widget = TimelineWidget(
+            y_axis_interval=100.0,
+            y_axis_label_interval=1_000.0,
+            dynamic_height=True,
+            include_event_values_in_scale=False,
+            pin_events_to_zero=True,
+        )
         self.chart_layout.addWidget(self.timeline_widget)
 
         self.balance_chart_title = QLabel("Balances")
         self.balance_chart_title.setContentsMargins(10, 0, 10, 0)
         self.chart_layout.addWidget(self.balance_chart_title)
 
-        self.balance_timeline_widget = TimelineWidget()
+        self.balance_timeline_widget = TimelineWidget(
+            y_axis_interval=20_000.0,
+            y_axis_label_interval=100_000.0,
+            dynamic_height=True,
+            include_event_values_in_scale=False,
+            pin_events_to_zero=False,
+        )
         self.chart_layout.addWidget(self.balance_timeline_widget)
 
         self.timeline_scroll = QScrollArea()
@@ -447,21 +598,10 @@ class PlannerWindow(QMainWindow):
         layout.addWidget(self.results_table)
         return panel
 
-    def _populate_demo_data(self) -> None:
-        rows = [
-            [True, "RecurringFlow", "Salary", "4500", "cash", "monthly", "2026-01-01", "", "income", "2.0"],
-            [True, "RecurringFlow", "Rent", "-1500", "cash", "monthly", "2026-01-01", "", "housing", "2.0"],
-            [True, "RecurringFlow", "ETF Savings", "900", "portfolio", "monthly", "2026-01-01", "2034-12-01", "savings", "2.0"],
-            [True, "RecurringFlow", "ETF Savings", "1200", "portfolio", "monthly", "2035-01-01", "", "savings", "2.0"],
-            [True, "OneOffEvent", "Inheritance", "75000", "cash", "", "2035-06-01", "", "windfall", ""],
-        ]
-        for row in rows:
-            self._append_scenario_row(row)
-
     def _connect_refresh_signals(self) -> None:
         self.scenario_table.itemChanged.connect(self.refresh_timeline)
         self.start_month_edit.editingFinished.connect(self.refresh_timeline)
-        self.current_age_spin.valueChanged.connect(self.refresh_timeline)
+        self.birthday_edit.editingFinished.connect(self.refresh_timeline)
         self.target_age_spin.valueChanged.connect(self.refresh_timeline)
 
     def _enabled_item(self, enabled: bool) -> QTableWidgetItem:
@@ -485,13 +625,13 @@ class PlannerWindow(QMainWindow):
 
     def add_recurring_flow(self) -> None:
         self._append_scenario_row(
-            [True, "RecurringFlow", "New flow", "0", "cash", "monthly", self.start_month_edit.text(), "", "general", "0.0"]
+            [True, "RecurringFlow", "general", "0", "cash", "monthly", self.start_month_edit.text(), "", "0.0"]
         )
         self.refresh_timeline()
 
     def add_one_off_event(self) -> None:
         self._append_scenario_row(
-            [True, "OneOffEvent", "New event", "0", "cash", "", self.start_month_edit.text(), "", "general", ""]
+            [True, "OneOffEvent", "general", "0", "cash", "", self.start_month_edit.text(), "", ""]
         )
         self.refresh_timeline()
 
@@ -516,19 +656,17 @@ class PlannerWindow(QMainWindow):
         for row in range(self.scenario_table.rowCount()):
             enabled = self._scenario_enabled(row)
             item_type = self._scenario_value(row, 1)
-            name = self._scenario_value(row, 2)
+            category = self._scenario_value(row, 2) or "general"
             amount = self._scenario_value(row, 3)
             target = self._scenario_value(row, 4)
             frequency = self._scenario_value(row, 5)
             start = self._scenario_value(row, 6)
             end = self._scenario_value(row, 7)
-            category = self._scenario_value(row, 8) or "general"
-            adjustment_rate = self._scenario_value(row, 9)
+            adjustment_rate = self._scenario_value(row, 8)
 
             if item_type == "RecurringFlow":
                 recurring_flows.append(
                     RecurringFlow(
-                        name=name,
                         amount=float(amount),
                         target=FlowTarget(target),
                         frequency=Frequency(frequency),
@@ -542,7 +680,6 @@ class PlannerWindow(QMainWindow):
             elif item_type == "OneOffEvent":
                 one_off_events.append(
                     OneOffEvent(
-                        name=name,
                         amount=float(amount),
                         target=FlowTarget(target),
                         occurs_on=date.fromisoformat(start),
@@ -555,7 +692,7 @@ class PlannerWindow(QMainWindow):
 
         return Plan(
             person=Person(
-                current_age_years=self.current_age_spin.value(),
+                birth_date=date.fromisoformat(self.birthday_edit.text().strip()),
                 target_age_years=self.target_age_spin.value(),
             ),
             start_month=date.fromisoformat(self.start_month_edit.text().strip()),
@@ -619,6 +756,8 @@ class PlannerWindow(QMainWindow):
 
         plan_to_json(plan, path)
         self.current_file = Path(path)
+        self.settings_store.set_last_scenario_path(self.current_file)
+        self._update_scenario_name()
         self.setWindowTitle(f"Afterwork Planner - {self.current_file}")
 
     def load_plan(self) -> None:
@@ -626,14 +765,17 @@ class PlannerWindow(QMainWindow):
         if not path:
             return
 
+        self.load_plan_from_path(Path(path))
+
+    def load_plan_from_path(self, path: Path) -> bool:
         try:
             plan = plan_from_json(path)
         except Exception as exc:
             QMessageBox.critical(self, "Load error", str(exc))
-            return
+            return False
 
         self.start_month_edit.setText(plan.start_month.isoformat())
-        self.current_age_spin.setValue(plan.person.current_age_years)
+        self.birthday_edit.setText(plan.person.birth_date.isoformat())
         self.target_age_spin.setValue(plan.person.target_age_years)
         self.starting_cash_spin.setValue(plan.starting_cash_balance)
         self.portfolio_start_spin.setValue(plan.portfolio.starting_balance)
@@ -645,13 +787,12 @@ class PlannerWindow(QMainWindow):
                 [
                     flow.enabled,
                     "RecurringFlow",
-                    flow.name,
+                    flow.category,
                     str(flow.amount),
                     flow.target.value,
                     flow.frequency.value,
                     flow.starts_on.isoformat(),
                     flow.ends_on.isoformat() if flow.ends_on else "",
-                    flow.category,
                     str(flow.annual_adjustment_rate * 100.0),
                 ]
             )
@@ -660,21 +801,23 @@ class PlannerWindow(QMainWindow):
                 [
                     event.enabled,
                     "OneOffEvent",
-                    event.name,
+                    event.category,
                     str(event.amount),
                     event.target.value,
                     "",
                     event.occurs_on.isoformat(),
                     "",
-                    event.category,
                     "",
                 ]
             )
 
         self.current_file = Path(path)
+        self.settings_store.set_last_scenario_path(self.current_file)
+        self._update_scenario_name()
         self.setWindowTitle(f"Afterwork Planner - {self.current_file}")
         self.refresh_timeline()
         self.run_simulation()
+        return True
 
     def refresh_timeline(self) -> None:
         try:
@@ -715,7 +858,7 @@ class PlannerWindow(QMainWindow):
             if points:
                 scenario_series.append(
                     ChartSeries(
-                        name=flow.name,
+                        name=flow.display_label,
                         color=QColor("#2f8f63") if flow.target == FlowTarget.PORTFOLIO else QColor("#2e6ea6"),
                         points=points,
                         series_type="flow",
@@ -727,7 +870,7 @@ class PlannerWindow(QMainWindow):
                 continue
             scenario_series.append(
                 ChartSeries(
-                    name=event.name,
+                    name=event.display_label,
                     color=QColor("#d9822b"),
                     points=[ChartPoint(event.occurs_on, event.amount)],
                     series_type="event",
@@ -792,10 +935,33 @@ class PlannerWindow(QMainWindow):
         self.chart_container.setMinimumSize(chart_width, total_height)
         self.chart_container.resize(chart_width, total_height)
 
+    def _update_scenario_name(self) -> None:
+        self.scenario_name_label.setText(self.current_file.name if self.current_file is not None else "No scenario loaded")
+
 
 def main() -> None:
+    parser = argparse.ArgumentParser(prog="afterwork-ui")
+    parser.add_argument("scenario", nargs="?", help="Path to a scenario JSON file")
+    args = parser.parse_args()
+
+    settings_store = SettingsStore()
+    settings_store.ensure_exists()
+
     app = QApplication(sys.argv)
-    window = PlannerWindow()
+    window = PlannerWindow(settings_store)
+    startup_path: Path | None = None
+
+    if args.scenario:
+        startup_path = Path(args.scenario).expanduser()
+    else:
+        startup_path = settings_store.get_last_scenario_path()
+
+    if startup_path is not None:
+        if startup_path.exists():
+            window.load_plan_from_path(startup_path)
+        elif args.scenario:
+            QMessageBox.critical(window, "Load error", f"Scenario file not found: {startup_path}")
+
     window.show()
     sys.exit(app.exec())
 

@@ -46,7 +46,7 @@ class SimulationEngine:
                     portfolio_contribution_nominal += adjusted_amount
 
                 flow_present_value += flow.present_value(adjusted_amount, period_index)
-                applied_names.append(flow.name)
+                applied_names.append(flow.display_label)
 
             for event in active_one_off_events:
                 if not event.occurs_in_month(current_month):
@@ -59,7 +59,7 @@ class SimulationEngine:
                     portfolio_contribution_nominal += event.amount
 
                 flow_present_value += event.amount
-                applied_names.append(event.name)
+                applied_names.append(event.display_label)
 
             cash_balance += cash_flow_nominal
             portfolio_balance += portfolio_contribution_nominal
@@ -74,7 +74,7 @@ class SimulationEngine:
 
             portfolio_underflow = portfolio_balance < 0
             total_balance = cash_balance + portfolio_balance
-            age_years = plan.person.current_age_years + (offset + 1) / 12
+            age_years = plan.person.age_years_at(current_month)
 
             records.append(
                 MonthlyRecord(

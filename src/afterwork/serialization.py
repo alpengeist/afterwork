@@ -19,7 +19,7 @@ def _date_from_str(value: str) -> date:
 def plan_to_dict(plan: Plan) -> dict[str, Any]:
     return {
         "person": {
-            "current_age_years": plan.person.current_age_years,
+            "birth_date": _date_to_str(plan.person.birth_date),
             "target_age_years": plan.person.target_age_years,
         },
         "start_month": _date_to_str(plan.start_month),
@@ -30,7 +30,6 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
         },
         "recurring_flows": [
             {
-                "name": flow.name,
                 "amount": flow.amount,
                 "frequency": flow.frequency.value,
                 "starts_on": _date_to_str(flow.starts_on),
@@ -44,7 +43,6 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
         ],
         "one_off_events": [
             {
-                "name": event.name,
                 "amount": event.amount,
                 "occurs_on": _date_to_str(event.occurs_on),
                 "category": event.category,
@@ -59,7 +57,6 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
 def plan_from_dict(data: dict[str, Any]) -> Plan:
     recurring_flows = [
         RecurringFlow(
-            name=item["name"],
             amount=float(item["amount"]),
             frequency=Frequency(item["frequency"]),
             starts_on=_date_from_str(item["starts_on"]),
@@ -73,7 +70,6 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
     ]
     one_off_events = [
         OneOffEvent(
-            name=item["name"],
             amount=float(item["amount"]),
             occurs_on=_date_from_str(item["occurs_on"]),
             category=item.get("category", "general"),
@@ -86,7 +82,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
     portfolio_data = data.get("portfolio", {})
     return Plan(
         person=Person(
-            current_age_years=int(person_data["current_age_years"]),
+            birth_date=_date_from_str(person_data["birth_date"]),
             target_age_years=int(person_data["target_age_years"]),
         ),
         start_month=_date_from_str(data["start_month"]),

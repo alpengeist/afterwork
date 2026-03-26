@@ -27,14 +27,20 @@ def add_months(current: date, months: int) -> date:
 
 @dataclass(frozen=True)
 class Person:
-    current_age_years: int
+    birth_date: date
     target_age_years: int
 
-    @property
-    def simulation_months(self) -> int:
-        if self.target_age_years < self.current_age_years:
-            raise ValueError("target_age_years must be greater than or equal to current_age_years")
-        return (self.target_age_years - self.current_age_years) * 12
+    def age_years_at(self, on_date: date) -> float:
+        months = (on_date.year - self.birth_date.year) * 12 + (on_date.month - self.birth_date.month)
+        if on_date.day < self.birth_date.day:
+            months -= 1
+        return months / 12
+
+    def simulation_months(self, start_month: date) -> int:
+        current_age_years = self.age_years_at(start_month)
+        if self.target_age_years < current_age_years:
+            raise ValueError("target_age_years must be greater than the age implied by birth_date")
+        return max(int((self.target_age_years - current_age_years) * 12), 0)
 
 
 @dataclass(frozen=True)
@@ -49,7 +55,6 @@ class Portfolio:
 
 @dataclass(frozen=True)
 class RecurringFlow:
-    name: str
     amount: float
     frequency: Frequency
     starts_on: date
@@ -73,6 +78,10 @@ class RecurringFlow:
         return (self.__class__.__name__, self.category)
 
     @property
+    def display_label(self) -> str:
+        return self.category.replace("_", " ").title()
+
+    @property
     def monthly_adjustment_rate(self) -> float:
         return (1 + self.annual_adjustment_rate) ** (1 / 12) - 1
 
@@ -85,7 +94,6 @@ class RecurringFlow:
 
 @dataclass(frozen=True)
 class OneOffEvent:
-    name: str
     amount: float
     occurs_on: date
     category: str = "general"
@@ -94,6 +102,10 @@ class OneOffEvent:
 
     def occurs_in_month(self, current_month: date) -> bool:
         return self.occurs_on.year == current_month.year and self.occurs_on.month == current_month.month
+
+    @property
+    def display_label(self) -> str:
+        return self.category.replace("_", " ").title()
 
 
 @dataclass(frozen=True)
@@ -106,7 +118,7 @@ class Plan:
     one_off_events: list[OneOffEvent] = field(default_factory=list)
 
     def simulation_months(self) -> int:
-        return self.person.simulation_months
+        return self.person.simulation_months(self.start_month)
 
 
 @dataclass(frozen=True)
