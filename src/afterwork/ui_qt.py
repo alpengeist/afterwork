@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from dataclasses import dataclass
@@ -45,8 +46,8 @@ from afterwork import (
     Portfolio,
     RecurringFlow,
     SimulationEngine,
-    plan_from_json,
-    plan_to_json,
+    plan_from_dict,
+    plan_to_dict,
 )
 from afterwork.app_settings import SettingsStore
 from afterwork.domain import add_months, month_index
@@ -109,6 +110,12 @@ class ScenarioTableDelegate(TableTextDelegate):
     ITEM_TYPE_COLUMN = 1
     TARGET_COLUMN = 4
     FREQUENCY_COLUMN = 5
+    START_COLUMN = 6
+    END_COLUMN = 7
+
+    def __init__(self, parent: QWidget | None = None, *, date_reference_options: callable | None = None):
+        super().__init__(parent)
+        self._date_reference_options = date_reference_options
 
     def createEditor(self, parent, option, index):
         if index.column() == self.TARGET_COLUMN:
@@ -127,13 +134,28 @@ class ScenarioTableDelegate(TableTextDelegate):
             editor.setFrame(False)
             return editor
 
+        if index.column() in {self.START_COLUMN, self.END_COLUMN}:
+            editor = QComboBox(parent)
+            editor.setEditable(True)
+            editor.setFrame(False)
+            if index.column() == self.END_COLUMN:
+                editor.addItem("")
+            if self._date_reference_options is not None:
+                editor.addItems(self._date_reference_options())
+            return editor
+
         return super().createEditor(parent, option, index)
 
     def setEditorData(self, editor, index) -> None:
         if isinstance(editor, QComboBox):
             value = (index.data() or "").strip()
             combo_index = editor.findText(value)
-            editor.setCurrentIndex(max(combo_index, 0))
+            if combo_index >= 0:
+                editor.setCurrentIndex(combo_index)
+            elif editor.isEditable():
+                editor.setEditText(value)
+            elif editor.count() > 0:
+                editor.setCurrentIndex(0)
             return
 
         super().setEditorData(editor, index)
@@ -615,6 +637,8 @@ class PlannerWindow(QMainWindow):
     TOOLBAR_BUTTON_WIDTH = 118
     TOOLBAR_BUTTON_HEIGHT = 36
     AUTOSAVE_DELAY_MS = 1200
+    RETIREMENT_MONTH_LABEL = "retirement"
+    RETIREMENT_MONTH_REFERENCE = "retirement_month"
     SCENARIO_CATEGORY_COLUMN = 2
     SCENARIO_START_COLUMN = 6
     SCENARIO_END_COLUMN = 7
@@ -714,6 +738,8 @@ class PlannerWindow(QMainWindow):
 
         self.start_month_edit = QLineEdit("2026-01-01")
         self.start_month_edit.setFixedWidth(110)
+        self.retirement_month_edit = QLineEdit("2026-01-01")
+        self.retirement_month_edit.setFixedWidth(110)
         self.birthday_edit = QLineEdit("1986-01-01")
         self.birthday_edit.setFixedWidth(110)
         self.target_age_spin = QSpinBox()
@@ -722,23 +748,24 @@ class PlannerWindow(QMainWindow):
         self.target_age_spin.setFixedWidth(72)
         self.starting_cash_spin = QDoubleSpinBox()
         self.starting_cash_spin.setRange(-9_999_999, 9_999_999)
-        self.starting_cash_spin.setDecimals(2)
+        self.starting_cash_spin.setDecimals(0)
         self.starting_cash_spin.setValue(25_000)
-        self.starting_cash_spin.setFixedWidth(118)
+        self.starting_cash_spin.setFixedWidth(96)
         self.portfolio_start_spin = QDoubleSpinBox()
         self.portfolio_start_spin.setRange(-9_999_999, 9_999_999)
-        self.portfolio_start_spin.setDecimals(2)
+        self.portfolio_start_spin.setDecimals(0)
         self.portfolio_start_spin.setValue(50_000)
-        self.portfolio_start_spin.setFixedWidth(118)
+        self.portfolio_start_spin.setFixedWidth(96)
         self.portfolio_growth_spin = QDoubleSpinBox()
         self.portfolio_growth_spin.setRange(-1.0, 10.0)
-        self.portfolio_growth_spin.setDecimals(4)
-        self.portfolio_growth_spin.setSingleStep(0.005)
+        self.portfolio_growth_spin.setDecimals(1)
+        self.portfolio_growth_spin.setSingleStep(0.1)
         self.portfolio_growth_spin.setValue(5.0)
-        self.portfolio_growth_spin.setFixedWidth(96)
+        self.portfolio_growth_spin.setFixedWidth(72)
 
         fields = [
             ("Start Month", self.start_month_edit),
+            ("Retirement Month", self.retirement_month_edit),
             ("Birthday", self.birthday_edit),
             ("Target Age", self.target_age_spin),
             ("Starting Cash", self.starting_cash_spin),
@@ -795,7 +822,9 @@ class PlannerWindow(QMainWindow):
 
         self.scenario_table = QTableWidget(0, len(SCENARIO_HEADERS))
         self.scenario_table.setHorizontalHeaderLabels(SCENARIO_HEADERS)
-        self.scenario_table.setItemDelegate(ScenarioTableDelegate(self.scenario_table))
+        self.scenario_table.setItemDelegate(
+            ScenarioTableDelegate(self.scenario_table, date_reference_options=self._date_reference_options)
+        )
         self.scenario_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.scenario_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.scenario_table.verticalHeader().setVisible(False)
@@ -983,6 +1012,7 @@ class PlannerWindow(QMainWindow):
         self.scenario_table.itemChanged.connect(self._on_scenario_table_changed)
         self.scenario_table.horizontalHeader().sectionClicked.connect(self._on_scenario_header_clicked)
         self.start_month_edit.editingFinished.connect(self._on_plan_input_changed)
+        self.retirement_month_edit.editingFinished.connect(self._on_plan_input_changed)
         self.birthday_edit.editingFinished.connect(self._on_plan_input_changed)
         self.target_age_spin.valueChanged.connect(self._on_plan_input_changed)
         self.starting_cash_spin.valueChanged.connect(self._on_plan_input_changed)
@@ -1102,11 +1132,47 @@ class PlannerWindow(QMainWindow):
             self._scenario_value(row, 8),
         ]
 
+    def _date_reference_options(self) -> list[str]:
+        return [self.RETIREMENT_MONTH_LABEL]
+
+    def _resolve_date_reference(self, value: str) -> date:
+        text = value.strip()
+        if text in {self.RETIREMENT_MONTH_LABEL, self.RETIREMENT_MONTH_REFERENCE}:
+            return date.fromisoformat(self.retirement_month_edit.text().strip())
+        return date.fromisoformat(text)
+
+    def _save_payload(self, plan: Plan) -> dict[str, object]:
+        return {
+            **plan_to_dict(plan),
+            "_ui": {
+                "parameters": {
+                    self.RETIREMENT_MONTH_REFERENCE: self.retirement_month_edit.text().strip(),
+                },
+                "scenario_rows": [
+                    {
+                        "enabled": bool(values[0]),
+                        "type": str(values[1]),
+                        "category": str(values[2]),
+                        "amount": str(values[3]),
+                        "target": str(values[4]),
+                        "frequency": str(values[5]),
+                        "start": str(values[6]),
+                        "end": str(values[7]),
+                        "adjustment_rate": str(values[8]),
+                    }
+                    for values in (
+                        self._scenario_row_values(row)
+                        for row in range(self.scenario_table.rowCount())
+                    )
+                ],
+            },
+        }
+
     def _scenario_date_sort_key(self, value: str, *, ascending: bool) -> tuple[int, int]:
         if not value:
             return (1, 0)
         try:
-            ordinal = date.fromisoformat(value).toordinal()
+            ordinal = self._resolve_date_reference(value).toordinal()
         except ValueError:
             return (1, 0)
         return (0, ordinal if ascending else -ordinal)
@@ -1286,8 +1352,8 @@ class PlannerWindow(QMainWindow):
                         amount=float(amount),
                         target=FlowTarget(target),
                         frequency=Frequency(frequency),
-                        starts_on=date.fromisoformat(start),
-                        ends_on=date.fromisoformat(end) if end else None,
+                        starts_on=self._resolve_date_reference(start),
+                        ends_on=self._resolve_date_reference(end) if end else None,
                         category=category,
                         annual_adjustment_rate=float(adjustment_rate or 0.0) / 100.0,
                         enabled=enabled,
@@ -1298,7 +1364,7 @@ class PlannerWindow(QMainWindow):
                     OneOffEvent(
                         amount=float(amount),
                         target=FlowTarget(target),
-                        occurs_on=date.fromisoformat(start),
+                        occurs_on=self._resolve_date_reference(start),
                         category=category,
                         enabled=enabled,
                     )
@@ -1397,14 +1463,21 @@ class PlannerWindow(QMainWindow):
 
     def load_plan_from_path(self, path: Path) -> bool:
         try:
-            plan = plan_from_json(path)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            plan = plan_from_dict(data)
         except Exception as exc:
             QMessageBox.critical(self, "Load error", str(exc))
             return False
 
+        ui_state = data.get("_ui", {}) if isinstance(data, dict) else {}
+        parameters = ui_state.get("parameters", {}) if isinstance(ui_state, dict) else {}
+        scenario_rows = ui_state.get("scenario_rows", []) if isinstance(ui_state, dict) else []
+
         self._suspend_change_tracking = True
         try:
             self.start_month_edit.setText(plan.start_month.isoformat())
+            retirement_month = parameters.get(self.RETIREMENT_MONTH_REFERENCE, plan.start_month.isoformat())
+            self.retirement_month_edit.setText(str(retirement_month))
             self.birthday_edit.setText(plan.person.birth_date.isoformat())
             self.target_age_spin.setValue(plan.person.target_age_years)
             self.starting_cash_spin.setValue(plan.starting_cash_balance)
@@ -1412,34 +1485,52 @@ class PlannerWindow(QMainWindow):
             self.portfolio_growth_spin.setValue(plan.portfolio.annual_growth_rate * 100.0)
 
             self.scenario_table.setRowCount(0)
-            for flow in plan.recurring_flows:
-                self._append_scenario_row(
-                    [
-                        flow.enabled,
-                        "RecurringFlow",
-                        flow.category,
-                        str(flow.amount),
-                        flow.target.value,
-                        flow.frequency.value,
-                        flow.starts_on.isoformat(),
-                        flow.ends_on.isoformat() if flow.ends_on else "",
-                        str(flow.annual_adjustment_rate * 100.0),
-                    ]
-                )
-            for event in plan.one_off_events:
-                self._append_scenario_row(
-                    [
-                        event.enabled,
-                        "OneOffEvent",
-                        event.category,
-                        str(event.amount),
-                        event.target.value,
-                        "",
-                        event.occurs_on.isoformat(),
-                        "",
-                        "",
-                    ]
-                )
+            if isinstance(scenario_rows, list) and scenario_rows:
+                for row in scenario_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    self._append_scenario_row(
+                        [
+                            bool(row.get("enabled", True)),
+                            str(row.get("type", "")),
+                            str(row.get("category", "general")),
+                            str(row.get("amount", "0")),
+                            str(row.get("target", FlowTarget.CASH.value)),
+                            str(row.get("frequency", "")),
+                            str(row.get("start", "")),
+                            str(row.get("end", "")),
+                            str(row.get("adjustment_rate", "")),
+                        ]
+                    )
+            else:
+                for flow in plan.recurring_flows:
+                    self._append_scenario_row(
+                        [
+                            flow.enabled,
+                            "RecurringFlow",
+                            flow.category,
+                            str(flow.amount),
+                            flow.target.value,
+                            flow.frequency.value,
+                            flow.starts_on.isoformat(),
+                            flow.ends_on.isoformat() if flow.ends_on else "",
+                            str(flow.annual_adjustment_rate * 100.0),
+                        ]
+                    )
+                for event in plan.one_off_events:
+                    self._append_scenario_row(
+                        [
+                            event.enabled,
+                            "OneOffEvent",
+                            event.category,
+                            str(event.amount),
+                            event.target.value,
+                            "",
+                            event.occurs_on.isoformat(),
+                            "",
+                            "",
+                        ]
+                    )
         finally:
             self._suspend_change_tracking = False
 
@@ -1554,7 +1645,7 @@ class PlannerWindow(QMainWindow):
         for flows in grouped.values():
             ordered = sorted(flows, key=lambda item: item.starts_on)
             for index, flow in enumerate(ordered):
-                effective_end = flow.ends_on or plan_end
+                effective_end = add_months(flow.ends_on, -1) if flow.ends_on is not None else plan_end
                 if index < len(ordered) - 1:
                     successor_start = ordered[index + 1].starts_on
                     effective_end = min(effective_end, add_months(successor_start, -1))
@@ -1612,7 +1703,7 @@ class PlannerWindow(QMainWindow):
 
     def _save_plan_to_path(self, plan: Plan, path: Path, *, save_as_current: bool, show_errors: bool = True) -> bool:
         try:
-            plan_to_json(plan, path)
+            path.write_text(json.dumps(self._save_payload(plan), indent=2), encoding="utf-8")
         except Exception as exc:
             if show_errors:
                 QMessageBox.critical(self, "Save error", str(exc))

@@ -67,7 +67,7 @@ class RecurringFlow:
     def occurs_in_month(self, current_month: date) -> bool:
         if current_month < self.starts_on:
             return False
-        if self.ends_on is not None and current_month > self.ends_on:
+        if self.ends_on is not None and current_month >= self.ends_on:
             return False
         if self.frequency == Frequency.MONTHLY:
             return True
