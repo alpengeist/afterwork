@@ -369,12 +369,19 @@ class TableTextDelegate(QStyledItemDelegate):
 
     def createEditor(self, parent, option, index):
         editor = super().createEditor(parent, option, index)
+        self._apply_editor_font(editor, option, index)
         if isinstance(editor, QLineEdit):
             self._style_line_editor(editor)
         return editor
 
     def updateEditorGeometry(self, editor, option, index) -> None:
         editor.setGeometry(option.rect.adjusted(self.EDITOR_LEFT_INSET, self.EDITOR_TOP_OFFSET, 0, 0))
+
+    def _apply_editor_font(self, editor: QWidget, option, index) -> None:
+        font = index.data(Qt.ItemDataRole.FontRole)
+        if font is None:
+            font = option.font
+        editor.setFont(font)
 
     def _style_line_editor(self, editor: QLineEdit) -> None:
         editor.setFrame(False)
@@ -407,6 +414,7 @@ class ScenarioTableDelegate(TableTextDelegate):
         if index.column() == self.TARGET_COLUMN:
             editor = QComboBox(parent)
             editor.addItems(TARGET_OPTIONS)
+            self._apply_editor_font(editor, option, index)
             self._style_combo_editor(editor)
             return editor
 
@@ -417,12 +425,14 @@ class ScenarioTableDelegate(TableTextDelegate):
 
             editor = QComboBox(parent)
             editor.addItems(FREQUENCY_OPTIONS)
+            self._apply_editor_font(editor, option, index)
             self._style_combo_editor(editor)
             return editor
 
         if index.column() in {self.START_COLUMN, self.END_COLUMN}:
             editor = QComboBox(parent)
             editor.setEditable(True)
+            self._apply_editor_font(editor, option, index)
             self._style_combo_editor(editor)
             if index.column() == self.END_COLUMN:
                 editor.addItem("")
@@ -472,6 +482,7 @@ class ScenarioTableDelegate(TableTextDelegate):
             """
         )
         if editor.isEditable() and editor.lineEdit() is not None:
+            editor.lineEdit().setFont(editor.font())
             self._style_line_editor(editor.lineEdit())
 
 
@@ -1217,8 +1228,6 @@ class PlannerWindow(QMainWindow):
             include_event_values_in_scale=False,
             pin_events_to_zero=True,
         )
-        self.chart_layout.addWidget(self.timeline_widget)
-
         self.balance_timeline_widget = TimelineWidget(
             y_axis_interval=20_000.0,
             y_axis_label_interval=100_000.0,
@@ -1227,6 +1236,7 @@ class PlannerWindow(QMainWindow):
             pin_events_to_zero=False,
         )
         self.chart_layout.addWidget(self.balance_timeline_widget)
+        self.chart_layout.addWidget(self.timeline_widget)
 
         self.timeline_scroll = QScrollArea()
         self.timeline_scroll.setWidgetResizable(False)
