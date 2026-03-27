@@ -67,7 +67,12 @@ class SimulationEngine:
             portfolio_balance += portfolio_growth_nominal
             portfolio_transfer_nominal = 0.0
 
-            if cash_balance <= 0:
+            if cash_balance < plan.minimal_cash_level and plan.portfolio_withdrawal > 0:
+                while cash_balance < plan.minimal_cash_level:
+                    portfolio_transfer_nominal += plan.portfolio_withdrawal
+                    cash_balance += plan.portfolio_withdrawal
+                    portfolio_balance -= plan.portfolio_withdrawal
+            elif cash_balance <= 0:
                 portfolio_transfer_nominal = -cash_balance
                 cash_balance += portfolio_transfer_nominal
                 portfolio_balance -= portfolio_transfer_nominal

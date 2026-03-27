@@ -945,11 +945,23 @@ class TimelineWidget(QWidget):
         while current <= maximum + 0.1:
             tick_values.append(current)
             current += self.y_axis_interval
+        if minimum < 0 < maximum and all(abs(value) > 1e-9 for value in tick_values):
+            tick_values.append(0.0)
+            tick_values.sort()
+
+        major_values = {
+            value
+            for value in tick_values
+            if abs(value - round(value / self.y_axis_label_interval) * self.y_axis_label_interval) < 1e-9
+        }
+        if not major_values:
+            major_values.update({minimum, maximum})
+            if minimum < 0 < maximum:
+                major_values.add(0.0)
 
         for value in tick_values:
             y = self._y_for_value(value)
-            label_multiple = round(value / self.y_axis_label_interval)
-            is_major = abs(value - label_multiple * self.y_axis_label_interval) < 1e-9
+            is_major = any(abs(value - major_value) < 1e-9 for major_value in major_values)
             painter.setPen(major_grid_pen if is_major else grid_pen)
             painter.drawLine(self.LEFT_MARGIN, y, right_axis_x, y)
             painter.setPen(tick_pen)
@@ -1323,6 +1335,14 @@ class PlannerWindow(QMainWindow):
         self.starting_cash_spin.setRange(-9_999_999, 9_999_999)
         self.starting_cash_spin.setDecimals(0)
         self.starting_cash_spin.setValue(25_000)
+        self.minimal_cash_level_spin = QDoubleSpinBox()
+        self.minimal_cash_level_spin.setRange(0, 9_999_999)
+        self.minimal_cash_level_spin.setDecimals(0)
+        self.minimal_cash_level_spin.setValue(0)
+        self.portfolio_withdrawal_spin = QDoubleSpinBox()
+        self.portfolio_withdrawal_spin.setRange(0, 9_999_999)
+        self.portfolio_withdrawal_spin.setDecimals(0)
+        self.portfolio_withdrawal_spin.setValue(0)
         self.portfolio_start_spin = QDoubleSpinBox()
         self.portfolio_start_spin.setRange(-9_999_999, 9_999_999)
         self.portfolio_start_spin.setDecimals(0)
@@ -1336,6 +1356,8 @@ class PlannerWindow(QMainWindow):
         for widget in [
             self.target_age_spin,
             self.starting_cash_spin,
+            self.minimal_cash_level_spin,
+            self.portfolio_withdrawal_spin,
             self.portfolio_start_spin,
             self.portfolio_growth_spin,
         ]:
@@ -1346,6 +1368,8 @@ class PlannerWindow(QMainWindow):
         self._set_compact_width(self.birthday_edit, "1986-01-01", 34)
         self._set_compact_width(self.target_age_spin, "130", 40)
         self._set_compact_width(self.starting_cash_spin, "-9999999", 48)
+        self._set_compact_width(self.minimal_cash_level_spin, "9999999", 48)
+        self._set_compact_width(self.portfolio_withdrawal_spin, "9999999", 48)
         self._set_compact_width(self.portfolio_start_spin, "-9999999", 48)
         self._set_compact_width(self.portfolio_growth_spin, "-10.0", 48)
 
@@ -1359,6 +1383,8 @@ class PlannerWindow(QMainWindow):
             ("Birthday", self.birthday_edit),
             ("Target Age", self.target_age_spin),
             ("Starting Cash", self.starting_cash_spin),
+            ("Minimal Cash Level", self.minimal_cash_level_spin),
+            ("Portfolio Withdrawal", self.portfolio_withdrawal_spin),
             ("Starting Portfolio", self.portfolio_start_spin),
             ("Portfolio Growth %", self.portfolio_growth_spin),
         ]
@@ -1557,6 +1583,8 @@ class PlannerWindow(QMainWindow):
         self.birthday_edit.editingFinished.connect(self._on_plan_input_changed)
         self.target_age_spin.valueChanged.connect(self._on_plan_input_changed)
         self.starting_cash_spin.valueChanged.connect(self._on_plan_input_changed)
+        self.minimal_cash_level_spin.valueChanged.connect(self._on_plan_input_changed)
+        self.portfolio_withdrawal_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_start_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_growth_spin.valueChanged.connect(self._on_plan_input_changed)
 
@@ -2149,6 +2177,8 @@ class PlannerWindow(QMainWindow):
             ),
             start_month=date.fromisoformat(self.start_month_edit.text().strip()),
             starting_cash_balance=self.starting_cash_spin.value(),
+            minimal_cash_level=self.minimal_cash_level_spin.value(),
+            portfolio_withdrawal=self.portfolio_withdrawal_spin.value(),
             portfolio=Portfolio(
                 starting_balance=self.portfolio_start_spin.value(),
                 annual_growth_rate=self.portfolio_growth_spin.value() / 100.0,
@@ -2251,6 +2281,8 @@ class PlannerWindow(QMainWindow):
             self.birthday_edit.setText(plan.person.birth_date.isoformat())
             self.target_age_spin.setValue(plan.person.target_age_years)
             self.starting_cash_spin.setValue(plan.starting_cash_balance)
+            self.minimal_cash_level_spin.setValue(plan.minimal_cash_level)
+            self.portfolio_withdrawal_spin.setValue(plan.portfolio_withdrawal)
             self.portfolio_start_spin.setValue(plan.portfolio.starting_balance)
             self.portfolio_growth_spin.setValue(plan.portfolio.annual_growth_rate * 100.0)
 

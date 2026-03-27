@@ -113,6 +113,8 @@ class Plan:
     person: Person
     start_month: date
     starting_cash_balance: float = 0.0
+    minimal_cash_level: float = 0.0
+    portfolio_withdrawal: float = 0.0
     portfolio: Portfolio = field(default_factory=Portfolio)
     recurring_flows: list[RecurringFlow] = field(default_factory=list)
     one_off_events: list[OneOffEvent] = field(default_factory=list)
