@@ -28,8 +28,6 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QSizePolicy,
-    QStyle,
-    QStyleOptionViewItem,
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
@@ -88,6 +86,7 @@ INFO_COLOR = "#2e6ea6"
 WARNING_COLOR = "#d9822b"
 DANGER_COLOR = "#c2410c"
 PLOT_BACKGROUND = "#f7faff"
+SCENARIO_ACTIVE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 APP_STYLESHEET = f"""
 QMainWindow {{
@@ -365,25 +364,32 @@ class ChartSeries:
 
 
 class TableTextDelegate(QStyledItemDelegate):
-    EDITOR_X_OFFSET = 0
-    EDITOR_Y_OFFSET = -2
+    EDITOR_LEFT_INSET = 8
+    EDITOR_TOP_OFFSET = -1
 
     def createEditor(self, parent, option, index):
         editor = super().createEditor(parent, option, index)
         if isinstance(editor, QLineEdit):
-            editor.setFrame(False)
-            editor.setTextMargins(0, 0, 0, 0)
+            self._style_line_editor(editor)
         return editor
 
     def updateEditorGeometry(self, editor, option, index) -> None:
-        text_option = QStyleOptionViewItem(option)
-        self.initStyleOption(text_option, index)
-        text_rect = option.widget.style().subElementRect(
-            QStyle.SubElement.SE_ItemViewItemText,
-            text_option,
-            option.widget,
+        editor.setGeometry(option.rect.adjusted(self.EDITOR_LEFT_INSET, self.EDITOR_TOP_OFFSET, 0, 0))
+
+    def _style_line_editor(self, editor: QLineEdit) -> None:
+        editor.setFrame(False)
+        editor.setTextMargins(0, 0, 0, 0)
+        editor.setStyleSheet(
+            """
+            QLineEdit {
+                border: none;
+                background: transparent;
+                padding: 0;
+                margin: 0;
+                border-radius: 0;
+            }
+            """
         )
-        editor.setGeometry(text_rect.adjusted(self.EDITOR_X_OFFSET, self.EDITOR_Y_OFFSET, 0, 0))
 
 
 class ScenarioTableDelegate(TableTextDelegate):
@@ -401,7 +407,7 @@ class ScenarioTableDelegate(TableTextDelegate):
         if index.column() == self.TARGET_COLUMN:
             editor = QComboBox(parent)
             editor.addItems(TARGET_OPTIONS)
-            editor.setFrame(False)
+            self._style_combo_editor(editor)
             return editor
 
         if index.column() == self.FREQUENCY_COLUMN:
@@ -411,13 +417,13 @@ class ScenarioTableDelegate(TableTextDelegate):
 
             editor = QComboBox(parent)
             editor.addItems(FREQUENCY_OPTIONS)
-            editor.setFrame(False)
+            self._style_combo_editor(editor)
             return editor
 
         if index.column() in {self.START_COLUMN, self.END_COLUMN}:
             editor = QComboBox(parent)
             editor.setEditable(True)
-            editor.setFrame(False)
+            self._style_combo_editor(editor)
             if index.column() == self.END_COLUMN:
                 editor.addItem("")
             if self._date_reference_options is not None:
@@ -446,6 +452,27 @@ class ScenarioTableDelegate(TableTextDelegate):
             return
 
         super().setModelData(editor, model, index)
+
+    def _style_combo_editor(self, editor: QComboBox) -> None:
+        editor.setFrame(False)
+        editor.setStyleSheet(
+            """
+            QComboBox {
+                border: none;
+                background: transparent;
+                padding: 0;
+                margin: 0;
+                border-radius: 0;
+            }
+            QComboBox::drop-down {
+                border: none;
+                background: transparent;
+                width: 16px;
+            }
+            """
+        )
+        if editor.isEditable() and editor.lineEdit() is not None:
+            self._style_line_editor(editor.lineEdit())
 
 
 class CollapsibleSection(QWidget):
@@ -739,16 +766,23 @@ class TimelineWidget(QWidget):
         painter.setPen(pen)
 
         previous_point: tuple[int, int] | None = None
+        last_point: tuple[int, int] | None = None
         for point in series.points:
             current = (self._x_for_month(point.month, center=True), self._y_for_value(point.value))
             if previous_point is not None:
                 painter.drawLine(previous_point[0], previous_point[1], current[0], current[1])
             previous_point = current
+            last_point = current
 
-        if previous_point is not None:
+        if len(series.points) == 1 and last_point is not None:
+            painter.setPen(QPen(series.color.darker(130), 1))
+            painter.setBrush(QBrush(series.color))
+            painter.drawEllipse(last_point[0] - 4, last_point[1] - 4, 8, 8)
+
+        if last_point is not None:
             painter.setPen(QPen(series.color.darker(135)))
-            label_x = min(previous_point[0] + 10, self.width() - self.RIGHT_MARGIN + 12)
-            label_y = previous_point[1] - 6
+            label_x = min(last_point[0] + 10, self.width() - self.RIGHT_MARGIN + 12)
+            label_y = last_point[1] - 6
             painter.drawText(label_x, label_y, font_metrics.elidedText(series.name, Qt.TextElideMode.ElideRight, self.RIGHT_MARGIN - 18))
 
     def _draw_event_series(self, painter: QPainter, series: ChartSeries, font_metrics: QFontMetrics) -> None:
@@ -936,6 +970,8 @@ class PlannerWindow(QMainWindow):
     SCENARIO_CATEGORY_COLUMN = 2
     SCENARIO_START_COLUMN = 6
     SCENARIO_END_COLUMN = 7
+    ACTIVE_SYMBOL = "✓"
+    INACTIVE_SYMBOL = "✕"
 
     def __init__(self, settings_store: SettingsStore) -> None:
         super().__init__()
@@ -1266,6 +1302,7 @@ class PlannerWindow(QMainWindow):
 
     def _connect_refresh_signals(self) -> None:
         self.scenario_table.itemChanged.connect(self._on_scenario_table_changed)
+        self.scenario_table.cellClicked.connect(self._on_scenario_cell_clicked)
         self.scenario_table.horizontalHeader().sectionClicked.connect(self._on_scenario_header_clicked)
         self.start_month_edit.editingFinished.connect(self._on_plan_input_changed)
         self.retirement_month_edit.editingFinished.connect(self._on_plan_input_changed)
@@ -1286,6 +1323,13 @@ class PlannerWindow(QMainWindow):
             self.SCENARIO_END_COLUMN,
         }:
             self._sort_scenario_table(select_row_id=self._scenario_row_id(_item.row()))
+        self._mark_dirty()
+        self.refresh_timeline()
+
+    def _on_scenario_cell_clicked(self, row: int, column: int) -> None:
+        if column != 0 or self._suspend_change_tracking:
+            return
+        self._set_scenario_row_enabled(row, not self._scenario_enabled(row))
         self._mark_dirty()
         self.refresh_timeline()
 
@@ -1323,9 +1367,12 @@ class PlannerWindow(QMainWindow):
         item.setFlags(
             Qt.ItemFlag.ItemIsEnabled
             | Qt.ItemFlag.ItemIsSelectable
-            | Qt.ItemFlag.ItemIsUserCheckable
         )
-        item.setCheckState(Qt.CheckState.Checked if enabled else Qt.CheckState.Unchecked)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        self._apply_enabled_item_state(item, enabled)
         return item
 
     def _append_scenario_row(self, values: list[str | bool], *, row_id: int | None = None) -> int:
@@ -1340,9 +1387,40 @@ class PlannerWindow(QMainWindow):
                 item = QTableWidgetItem(str(value))
             item.setData(Qt.ItemDataRole.UserRole, row_id)
             self.scenario_table.setItem(row, column, item)
+        self._set_scenario_row_enabled(row, bool(values[0]), update_dirty=False)
         self._sync_target_cell(row)
         self._sync_frequency_cell(row)
+        self._apply_scenario_row_style(row)
         return row_id
+
+    def _apply_enabled_item_state(self, item: QTableWidgetItem, enabled: bool) -> None:
+        item.setData(SCENARIO_ACTIVE_ROLE, enabled)
+        item.setText(self.ACTIVE_SYMBOL if enabled else self.INACTIVE_SYMBOL)
+
+    def _set_scenario_row_enabled(self, row: int, enabled: bool, *, update_dirty: bool = True) -> None:
+        item = self.scenario_table.item(row, 0)
+        if item is None:
+            return
+        previous_suspend = self._suspend_change_tracking
+        self._suspend_change_tracking = True
+        try:
+            self._apply_enabled_item_state(item, enabled)
+            self._apply_scenario_row_style(row)
+        finally:
+            self._suspend_change_tracking = previous_suspend
+
+    def _apply_scenario_row_style(self, row: int) -> None:
+        enabled = self._scenario_enabled(row)
+        symbol_color = QColor(TEXT_COLOR if enabled else "#8c98a8")
+        text_color = QColor(TEXT_COLOR if enabled else "#8c98a8")
+        disabled_background = QColor("#f3f6fa")
+
+        for column in range(self.scenario_table.columnCount()):
+            item = self.scenario_table.item(row, column)
+            if item is None:
+                continue
+            item.setForeground(symbol_color if column == 0 else text_color)
+            item.setBackground(disabled_background if not enabled else QBrush())
 
     def _next_scenario_row_id(self) -> int:
         row_id = self._scenario_row_id_counter
@@ -1584,7 +1662,7 @@ class PlannerWindow(QMainWindow):
 
     def _scenario_enabled(self, row: int) -> bool:
         item = self.scenario_table.item(row, 0)
-        return item is not None and item.checkState() == Qt.CheckState.Checked
+        return item is not None and bool(item.data(SCENARIO_ACTIVE_ROLE))
 
     def _build_plan(self) -> Plan:
         recurring_flows: list[RecurringFlow] = []
