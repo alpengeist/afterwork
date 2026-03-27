@@ -9,9 +9,10 @@ from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QCloseEvent, QColor, QFontMetrics, QPainter, QPen, QPixmap
+from PySide6.QtGui import QAction, QBrush, QCloseEvent, QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractSpinBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -69,6 +70,284 @@ RESULT_HEADERS = [
 ]
 FREQUENCY_OPTIONS = [frequency.value for frequency in Frequency]
 TARGET_OPTIONS = [target.value for target in FlowTarget]
+ASSET_DIR = Path(__file__).resolve().parent / "assets"
+STEP_PLUS_ICON = (ASSET_DIR / "step-plus.svg").as_posix()
+STEP_MINUS_ICON = (ASSET_DIR / "step-minus.svg").as_posix()
+
+APP_BACKGROUND = "#eef3f9"
+SURFACE_COLOR = "#fbfdff"
+SURFACE_ALT_COLOR = "#f5f8fc"
+BORDER_COLOR = "#d7e1ee"
+TEXT_COLOR = "#132033"
+MUTED_TEXT_COLOR = "#617086"
+ACCENT_COLOR = "#2563eb"
+ACCENT_HOVER_COLOR = "#1d4ed8"
+ACCENT_SOFT_COLOR = "#dbeafe"
+SUCCESS_COLOR = "#2f8f63"
+INFO_COLOR = "#2e6ea6"
+WARNING_COLOR = "#d9822b"
+DANGER_COLOR = "#c2410c"
+PLOT_BACKGROUND = "#f7faff"
+
+APP_STYLESHEET = f"""
+QMainWindow {{
+    background-color: {APP_BACKGROUND};
+}}
+
+QWidget {{
+    color: {TEXT_COLOR};
+    selection-background-color: {ACCENT_COLOR};
+    selection-color: #ffffff;
+}}
+
+QWidget#AppRoot,
+QWidget#WorkspacePage {{
+    background: transparent;
+}}
+
+QFrame#SectionCard {{
+    background-color: {SURFACE_COLOR};
+    border: 1px solid {BORDER_COLOR};
+    border-radius: 18px;
+}}
+
+QWidget#FieldBlock {{
+    background-color: {SURFACE_ALT_COLOR};
+    border: 1px solid {BORDER_COLOR};
+    border-radius: 14px;
+}}
+
+QLabel#FieldLabel {{
+    color: {MUTED_TEXT_COLOR};
+    font-size: 11px;
+    font-weight: 600;
+}}
+
+QLabel#SummaryLabel {{
+    color: {MUTED_TEXT_COLOR};
+    font-weight: 600;
+    padding: 4px 2px 8px 2px;
+}}
+
+QPushButton {{
+    min-height: 40px;
+    padding: 0 16px;
+    border-radius: 12px;
+    border: 1px solid {BORDER_COLOR};
+    background-color: {SURFACE_COLOR};
+    color: {TEXT_COLOR};
+    font-weight: 600;
+}}
+
+QPushButton:hover {{
+    border-color: #b7c6da;
+    background-color: {SURFACE_ALT_COLOR};
+}}
+
+QPushButton:pressed {{
+    background-color: #edf3fb;
+}}
+
+QLineEdit,
+QComboBox,
+QAbstractSpinBox {{
+    min-height: 22px;
+    padding: 8px 10px;
+    background-color: #ffffff;
+    border: 1px solid #ccd7e5;
+    border-radius: 10px;
+}}
+
+QLineEdit:focus,
+QComboBox:focus,
+QAbstractSpinBox:focus {{
+    border: 1px solid {ACCENT_COLOR};
+}}
+
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+
+QSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {{
+    width: 20px;
+    background-color: #475569;
+    border-left: 1px solid #475569;
+}}
+
+QSpinBox::up-button,
+QDoubleSpinBox::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    border-top-right-radius: 10px;
+}}
+
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    border-top: 1px solid #64748b;
+    border-bottom-right-radius: 10px;
+}}
+
+QSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {{
+    background-color: #334155;
+}}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {{
+    image: url({STEP_PLUS_ICON});
+    width: 12px;
+    height: 12px;
+}}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {{
+    image: url({STEP_MINUS_ICON});
+    width: 12px;
+    height: 12px;
+}}
+
+QTableWidget {{
+    background-color: transparent;
+    alternate-background-color: {SURFACE_ALT_COLOR};
+    gridline-color: transparent;
+    border: 1px solid {BORDER_COLOR};
+    border-radius: 14px;
+}}
+
+QTableCornerButton::section,
+QHeaderView::section {{
+    background-color: {SURFACE_ALT_COLOR};
+    color: {MUTED_TEXT_COLOR};
+    border: none;
+    border-bottom: 1px solid {BORDER_COLOR};
+    padding: 10px 12px;
+    font-weight: 600;
+}}
+
+QTableWidget::item {{
+    padding: 8px 10px;
+    border-bottom: 1px solid #ebf0f6;
+}}
+
+QTableWidget::item:selected {{
+    background-color: {ACCENT_SOFT_COLOR};
+    color: {TEXT_COLOR};
+    border-top: 1px solid transparent;
+    border-bottom: 1px solid transparent;
+}}
+
+QTableWidget::item:selected:active,
+QTableWidget::item:selected:!active {{
+    background-color: {ACCENT_SOFT_COLOR};
+    color: {TEXT_COLOR};
+}}
+
+QTableWidget::indicator {{
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid #94a3b8;
+    background-color: #ffffff;
+}}
+
+QTableWidget::indicator:checked {{
+    background-color: #334155;
+    border-color: #334155;
+}}
+
+QTableWidget::indicator:unchecked {{
+    background-color: #ffffff;
+    border-color: #94a3b8;
+}}
+
+QTabWidget::pane {{
+    margin-top: -1px;
+    background-color: {SURFACE_COLOR};
+    border-top: 1px solid {BORDER_COLOR};
+}}
+
+QTabBar::tab {{
+    background-color: #dde6f0;
+    border: 1px solid {BORDER_COLOR};
+    border-bottom: none;
+    border-top-left-radius: 0px;
+    border-top-right-radius: 0px;
+    color: {MUTED_TEXT_COLOR};
+    font-weight: 600;
+    padding: 10px 18px;
+    margin-right: 2px;
+}}
+
+QTabBar::tab:selected {{
+    color: {TEXT_COLOR};
+    background-color: {SURFACE_COLOR};
+    border-color: {BORDER_COLOR};
+}}
+
+QTabBar::tab:hover:!selected {{
+    background-color: #e7eef7;
+    color: {TEXT_COLOR};
+}}
+
+QSplitter::handle {{
+    background-color: #d6e0ec;
+    margin: 6px 0;
+    border-radius: 3px;
+}}
+
+QSplitter::handle:hover {{
+    background-color: #bed0e5;
+}}
+
+QScrollArea {{
+    background: transparent;
+    border: none;
+}}
+
+QScrollBar:vertical,
+QScrollBar:horizontal {{
+    background: transparent;
+    border: none;
+    margin: 0;
+}}
+
+QScrollBar::handle:vertical,
+QScrollBar::handle:horizontal {{
+    background: #c7d4e4;
+    border-radius: 6px;
+    min-height: 24px;
+    min-width: 24px;
+}}
+
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover {{
+    background: #aebfd4;
+}}
+
+QScrollBar::add-line,
+QScrollBar::sub-line,
+QScrollBar::add-page,
+QScrollBar::sub-page {{
+    background: transparent;
+    border: none;
+}}
+"""
+
+
+def apply_app_theme(app: QApplication) -> None:
+    app.setStyle("Fusion")
+    font = QFont("Segoe UI")
+    font.setPointSize(10)
+    app.setFont(font)
+    app.setStyleSheet(APP_STYLESHEET)
 
 
 @dataclass(frozen=True)
@@ -300,12 +579,12 @@ class TimelineWidget(QWidget):
             return
 
         pixmap = QPixmap(self.size())
-        pixmap.fill(QColor("#ffffff"))
+        pixmap.fill(QColor(PLOT_BACKGROUND))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         if self.plan_start is None or self.plan_end is None:
-            painter.setPen(QColor("#666666"))
+            painter.setPen(QColor(MUTED_TEXT_COLOR))
             painter.drawText(self.rect().adjusted(16, 16, -16, -16), "Timeline is unavailable until the scenario dates are valid.")
         else:
             self._draw_axes(painter)
@@ -380,7 +659,7 @@ class TimelineWidget(QWidget):
         return round(self._plot_bottom() - position * plot_height)
 
     def _draw_axes(self, painter: QPainter) -> None:
-        axis_pen = QPen(QColor("#97a3b3"))
+        axis_pen = QPen(QColor("#a7b6c8"))
         painter.setPen(axis_pen)
         painter.drawLine(self.LEFT_MARGIN, self._plot_top(), self.LEFT_MARGIN, self._plot_bottom())
         painter.drawLine(self.LEFT_MARGIN, self._plot_bottom(), self.width() - self.RIGHT_MARGIN + 30, self._plot_bottom())
@@ -388,10 +667,10 @@ class TimelineWidget(QWidget):
         painter.drawLine(right_axis_x, self._plot_top(), right_axis_x, self._plot_bottom())
 
         minimum, maximum = self._value_range()
-        tick_pen = QPen(QColor("#657182"))
-        grid_pen = QPen(QColor("#d8dde3"))
+        tick_pen = QPen(QColor(MUTED_TEXT_COLOR))
+        grid_pen = QPen(QColor("#dde6f0"))
         grid_pen.setStyle(Qt.PenStyle.DashLine)
-        major_grid_pen = QPen(QColor("#9aa7b8"))
+        major_grid_pen = QPen(QColor("#bfd0e2"))
         major_grid_pen.setStyle(Qt.PenStyle.SolidLine)
         tick_values: list[float] = []
         current = minimum
@@ -415,14 +694,14 @@ class TimelineWidget(QWidget):
 
         if minimum < 0 < maximum:
             zero_y = self._y_for_value(0.0)
-            painter.setPen(QPen(QColor("#b8c0cb"), 1, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(QColor("#c0cddd"), 1, Qt.PenStyle.DashLine))
             painter.drawLine(self.LEFT_MARGIN, zero_y, right_axis_x, zero_y)
 
     def _draw_half_year_grid(self, painter: QPainter) -> None:
         assert self.plan_start is not None
         total_months = self._timeline_months()
-        half_year_pen = QPen(QColor("#c1cad6"))
-        label_pen = QPen(QColor("#5b6470"))
+        half_year_pen = QPen(QColor("#d5deea"))
+        label_pen = QPen(QColor(MUTED_TEXT_COLOR))
 
         for month_offset in range(0, total_months + 1, self.X_AXIS_RESOLUTION_MONTHS):
             tick_date = add_months(self.plan_start, month_offset)
@@ -501,7 +780,7 @@ class TimelineWidget(QWidget):
         bubble_rect = QRect(bubble_x, bubble_y, bubble_width, bubble_height)
 
         painter.setPen(QPen(QColor("#334155")))
-        painter.setBrush(QBrush(QColor(255, 255, 255, 235)))
+        painter.setBrush(QBrush(QColor(251, 253, 255, 242)))
         painter.drawRoundedRect(bubble_rect, 6, 6)
         painter.drawText(bubble_rect.adjusted(8, 0, -8, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter, hover_text)
 
@@ -574,10 +853,10 @@ class EventTimelineWidget(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(self.rect(), QColor("#ffffff"))
+        painter.fillRect(self.rect(), QColor(PLOT_BACKGROUND))
 
         if self.plan_start is None or self.plan_end is None:
-            painter.setPen(QColor("#666666"))
+            painter.setPen(QColor(MUTED_TEXT_COLOR))
             painter.drawText(self.rect().adjusted(16, 16, -16, -16), "Event timeline is unavailable until the scenario dates are valid.")
             return
 
@@ -604,8 +883,8 @@ class EventTimelineWidget(QWidget):
         assert self.plan_start is not None
         total_months = self._timeline_months()
         plot_bottom = self.TOP_MARGIN + max(len(self.items), 1) * self.ROW_HEIGHT
-        quarter_pen = QPen(QColor("#d5dbe3"))
-        year_pen = QPen(QColor("#5b6470"))
+        quarter_pen = QPen(QColor("#dde6f0"))
+        year_pen = QPen(QColor(MUTED_TEXT_COLOR))
 
         for month_offset in range(0, total_months + 1, 3):
             tick_date = add_months(self.plan_start, month_offset)
@@ -616,12 +895,12 @@ class EventTimelineWidget(QWidget):
                 painter.setPen(year_pen)
                 painter.drawText(x + 4, 12, f"{tick_date.year}")
 
-        painter.setPen(QPen(QColor("#c1cad6")))
+        painter.setPen(QPen(QColor("#d0dae7")))
         painter.drawLine(self.LEFT_MARGIN, plot_bottom, self.width() - self.RIGHT_MARGIN, plot_bottom)
 
     def _draw_items(self, painter: QPainter) -> None:
         font_metrics = QFontMetrics(painter.font())
-        text_pen = QPen(QColor("#334155"))
+        text_pen = QPen(QColor(TEXT_COLOR))
         for index, item in enumerate(self.items):
             y = self._row_y(index)
             label_rect = QRect(8, y - 10, self.LEFT_MARGIN - 16, 20)
@@ -649,8 +928,8 @@ class EventTimelineWidget(QWidget):
 
 
 class PlannerWindow(QMainWindow):
-    TOOLBAR_BUTTON_WIDTH = 118
-    TOOLBAR_BUTTON_HEIGHT = 36
+    TOOLBAR_BUTTON_WIDTH = 132
+    TOOLBAR_BUTTON_HEIGHT = 40
     AUTOSAVE_DELAY_MS = 1200
     RETIREMENT_MONTH_LABEL = "retirement"
     RETIREMENT_MONTH_REFERENCE = "retirement_month"
@@ -677,38 +956,17 @@ class PlannerWindow(QMainWindow):
         self.resize(1500, 900)
 
         root = QWidget()
+        root.setObjectName("AppRoot")
         self.setCentralWidget(root)
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(14, 10, 14, 14)
-        root_layout.setSpacing(12)
+        root_layout.setContentsMargins(24, 14, 24, 24)
+        root_layout.setSpacing(14)
 
-        self.scenario_name_label = QLabel("No scenario loaded")
-        scenario_font = self.scenario_name_label.font()
-        scenario_font.setPointSize(scenario_font.pointSize() + 4)
-        scenario_font.setBold(True)
-        self.scenario_name_label.setFont(scenario_font)
-        self.scenario_name_label.setContentsMargins(10, 6, 10, 0)
-        self.scenario_name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        root_layout.addWidget(self.scenario_name_label)
-
-        self.top_controls_panel = self._build_top_controls()
-        self.top_controls_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        root_layout.addWidget(self.top_controls_panel)
+        self._configure_menu_bar()
 
         self.body_splitter = QSplitter(Qt.Orientation.Vertical)
-        self.body_splitter.setHandleWidth(10)
-        self.body_splitter.setStyleSheet(
-            """
-            QSplitter::handle {
-                background-color: #b8c4d3;
-                border-top: 1px solid #8fa1b6;
-                border-bottom: 1px solid #8fa1b6;
-            }
-            QSplitter::handle:hover {
-                background-color: #9fb0c4;
-            }
-            """
-        )
+        self.body_splitter.setHandleWidth(8)
+        self.body_splitter.setChildrenCollapsible(False)
         root_layout.addWidget(self.body_splitter, 1)
 
         self.workspace_tabs = self._build_workspace_tabs()
@@ -725,44 +983,83 @@ class PlannerWindow(QMainWindow):
         self.run_simulation()
         self._set_dirty(False)
 
-    def _build_top_controls(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 2, 10, 6)
-        layout.setSpacing(12)
+    def _configure_menu_bar(self) -> None:
+        file_menu = self.menuBar().addMenu("&File")
 
-        settings = QWidget()
-        settings_layout = QGridLayout(settings)
-        settings_layout.setContentsMargins(0, 0, 0, 0)
-        settings_layout.setHorizontalSpacing(14)
-        settings_layout.setVerticalSpacing(10)
+        load_action = QAction("&Load...", self)
+        load_action.triggered.connect(self.load_plan)
+        file_menu.addAction(load_action)
+
+        save_action = QAction("&Save", self)
+        save_action.triggered.connect(self.save_plan)
+        file_menu.addAction(save_action)
+
+        save_as_action = QAction("Save &As...", self)
+        save_as_action.triggered.connect(self.save_plan_as)
+        file_menu.addAction(save_as_action)
+
+    def _build_workspace_tabs(self) -> QTabWidget:
+        tabs = QTabWidget()
+        tabs.setObjectName("WorkspaceTabs")
+        tabs.setDocumentMode(True)
+        tabs.addTab(self._build_assumptions_panel(), "Plan Assumptions")
+        tabs.addTab(self._build_scenario_panel(), "Event Table")
+        tabs.addTab(self._build_event_timeline_panel(), "Event Timeline")
+        tabs.addTab(self._build_results_panel(), "Simulation Table")
+        return tabs
+
+    def _build_assumptions_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("WorkspacePage")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(0)
+
+        settings_card = QFrame()
+        settings_card.setObjectName("SectionCard")
+        settings_layout = QVBoxLayout(settings_card)
+        settings_layout.setContentsMargins(20, 18, 20, 20)
+        settings_layout.setSpacing(0)
 
         self.start_month_edit = QLineEdit("2026-01-01")
-        self.start_month_edit.setFixedWidth(110)
         self.retirement_month_edit = QLineEdit("2026-01-01")
-        self.retirement_month_edit.setFixedWidth(110)
         self.birthday_edit = QLineEdit("1986-01-01")
-        self.birthday_edit.setFixedWidth(110)
         self.target_age_spin = QSpinBox()
         self.target_age_spin.setRange(0, 130)
         self.target_age_spin.setValue(95)
-        self.target_age_spin.setFixedWidth(72)
         self.starting_cash_spin = QDoubleSpinBox()
         self.starting_cash_spin.setRange(-9_999_999, 9_999_999)
         self.starting_cash_spin.setDecimals(0)
         self.starting_cash_spin.setValue(25_000)
-        self.starting_cash_spin.setFixedWidth(96)
         self.portfolio_start_spin = QDoubleSpinBox()
         self.portfolio_start_spin.setRange(-9_999_999, 9_999_999)
         self.portfolio_start_spin.setDecimals(0)
         self.portfolio_start_spin.setValue(50_000)
-        self.portfolio_start_spin.setFixedWidth(96)
         self.portfolio_growth_spin = QDoubleSpinBox()
         self.portfolio_growth_spin.setRange(-1.0, 10.0)
         self.portfolio_growth_spin.setDecimals(1)
         self.portfolio_growth_spin.setSingleStep(0.1)
         self.portfolio_growth_spin.setValue(5.0)
-        self.portfolio_growth_spin.setFixedWidth(72)
+
+        for widget in [
+            self.target_age_spin,
+            self.starting_cash_spin,
+            self.portfolio_start_spin,
+            self.portfolio_growth_spin,
+        ]:
+            widget.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+
+        self._set_compact_width(self.start_month_edit, "2026-01-01", 34)
+        self._set_compact_width(self.retirement_month_edit, "2026-01-01", 34)
+        self._set_compact_width(self.birthday_edit, "1986-01-01", 34)
+        self._set_compact_width(self.target_age_spin, "130", 40)
+        self._set_compact_width(self.starting_cash_spin, "-9999999", 48)
+        self._set_compact_width(self.portfolio_start_spin, "-9999999", 48)
+        self._set_compact_width(self.portfolio_growth_spin, "-10.0", 48)
+
+        field_row = QHBoxLayout()
+        field_row.setContentsMargins(0, 0, 0, 0)
+        field_row.setSpacing(12)
 
         fields = [
             ("Start Month", self.start_month_edit),
@@ -773,76 +1070,41 @@ class PlannerWindow(QMainWindow):
             ("Starting Portfolio", self.portfolio_start_spin),
             ("Portfolio Growth %", self.portfolio_growth_spin),
         ]
-        for index, (label, widget) in enumerate(fields):
-            settings_layout.addWidget(QLabel(label), 0, index * 2)
-            settings_layout.addWidget(widget, 0, index * 2 + 1)
-        settings_layout.setColumnStretch(len(fields) * 2, 1)
-
-        layout.addWidget(settings)
-
-        file_toolbar = QHBoxLayout()
-        file_toolbar.setSpacing(10)
-        for label, handler in [
-            ("Save", self.save_plan),
-            ("Save As", self.save_plan_as),
-            ("Load", self.load_plan),
-        ]:
-            button = QPushButton(label)
-            button.setFixedSize(self.TOOLBAR_BUTTON_WIDTH, self.TOOLBAR_BUTTON_HEIGHT)
-            button.setStyleSheet(
-                """
-                QPushButton {
-                    background-color: #d8e7f5;
-                    border: 1px solid #8eabc7;
-                    border-radius: 6px;
-                    color: #16324a;
-                    font-weight: 600;
-                    padding: 6px 12px;
-                }
-                QPushButton:hover {
-                    background-color: #c8def1;
-                    border-color: #6f95bb;
-                }
-                QPushButton:pressed {
-                    background-color: #b8d1e8;
-                }
-                """
+        for label, widget in fields:
+            field_row.addWidget(
+                self._create_field_block(label, widget),
+                alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
             )
-            button.clicked.connect(handler)
-            file_toolbar.addWidget(button)
-        file_toolbar.addStretch()
-        layout.addLayout(file_toolbar)
+        field_row.addStretch()
 
+        settings_layout.addLayout(field_row)
+        layout.addWidget(settings_card)
         return panel
-
-    def _build_workspace_tabs(self) -> QTabWidget:
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
-        tabs.addTab(self._build_scenario_panel(), "Event Table")
-        tabs.addTab(self._build_event_timeline_panel(), "Event Timeline")
-        tabs.addTab(self._build_results_panel(), "Simulation Table")
-        return tabs
 
     def _build_scenario_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("WorkspacePage")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 4, 0, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(0)
 
         self.scenario_table = QTableWidget(0, len(SCENARIO_HEADERS))
         self.scenario_table.setHorizontalHeaderLabels(SCENARIO_HEADERS)
         self.scenario_table.setItemDelegate(
             ScenarioTableDelegate(self.scenario_table, date_reference_options=self._date_reference_options)
         )
+        self.scenario_table.setAlternatingRowColors(True)
         self.scenario_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.scenario_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.scenario_table.setShowGrid(False)
         self.scenario_table.verticalHeader().setVisible(False)
+        self.scenario_table.verticalHeader().setDefaultSectionSize(40)
         self.scenario_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         header = self.scenario_table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(True)
-        self.scenario_table.setColumnWidth(0, 64)
+        self.scenario_table.setColumnWidth(0, 82)
         self.scenario_table.setColumnWidth(1, 110)
         self.scenario_table.setColumnWidth(2, 140)
         self.scenario_table.setColumnWidth(3, 90)
@@ -851,29 +1113,11 @@ class PlannerWindow(QMainWindow):
         self.scenario_table.setColumnWidth(6, 110)
         self.scenario_table.setColumnWidth(7, 110)
         self.scenario_table.setColumnWidth(8, 110)
-        self.scenario_table.setStyleSheet(
-            """
-            QTableWidget::item:selected {
-                background-color: #1f6aa5;
-                color: #ffffff;
-                border-top: 1px solid #0f3f66;
-                border-bottom: 1px solid #0f3f66;
-            }
-            QTableWidget::item:selected:active {
-                background-color: #1f6aa5;
-                color: #ffffff;
-            }
-            QTableWidget::item:selected:!active {
-                background-color: #5689b5;
-                color: #ffffff;
-            }
-            """
-        )
-
-        scenario_table_container = QWidget()
+        scenario_table_container = QFrame()
+        scenario_table_container.setObjectName("SectionCard")
         scenario_table_layout = QVBoxLayout(scenario_table_container)
-        scenario_table_layout.setContentsMargins(0, 4, 0, 4)
-        scenario_table_layout.setSpacing(10)
+        scenario_table_layout.setContentsMargins(20, 18, 20, 20)
+        scenario_table_layout.setSpacing(14)
 
         table_toolbar = QHBoxLayout()
         table_toolbar.setSpacing(10)
@@ -883,29 +1127,7 @@ class PlannerWindow(QMainWindow):
             ("Delete Row", self.delete_selected_row),
             ("Run Simulation", self.run_simulation),
         ]:
-            button = QPushButton(label)
-            button.setFixedSize(self.TOOLBAR_BUTTON_WIDTH, self.TOOLBAR_BUTTON_HEIGHT)
-            button.setStyleSheet(
-                """
-                QPushButton {
-                    background-color: #d8e7f5;
-                    border: 1px solid #8eabc7;
-                    border-radius: 6px;
-                    color: #16324a;
-                    font-weight: 600;
-                    padding: 6px 12px;
-                }
-                QPushButton:hover {
-                    background-color: #c8def1;
-                    border-color: #6f95bb;
-                }
-                QPushButton:pressed {
-                    background-color: #b8d1e8;
-                }
-                """
-            )
-            button.clicked.connect(handler)
-            table_toolbar.addWidget(button)
+            table_toolbar.addWidget(self._create_button(label, handler))
         table_toolbar.addStretch()
         scenario_table_layout.addLayout(table_toolbar)
         scenario_table_layout.addWidget(self.scenario_table)
@@ -915,22 +1137,23 @@ class PlannerWindow(QMainWindow):
 
     def _build_event_timeline_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("WorkspacePage")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 4, 0, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(0)
 
         self.event_timeline_widget = EventTimelineWidget()
         self.event_timeline_frame = QFrame()
+        self.event_timeline_frame.setObjectName("SectionCard")
         self.event_timeline_frame.setFrameShape(QFrame.Shape.NoFrame)
-        self.event_timeline_frame.setStyleSheet("QFrame { border: none; background: transparent; }")
         event_timeline_layout = QVBoxLayout(self.event_timeline_frame)
-        event_timeline_layout.setContentsMargins(0, 0, 0, 0)
+        event_timeline_layout.setContentsMargins(20, 18, 20, 20)
+        event_timeline_layout.setSpacing(14)
         self.event_timeline_scroll = QScrollArea()
         self.event_timeline_scroll.setWidgetResizable(False)
         self.event_timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.event_timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.event_timeline_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.event_timeline_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self.event_timeline_scroll.setMinimumHeight(self.event_timeline_widget.minimumHeight())
         self.event_timeline_scroll.setWidget(self.event_timeline_widget)
         self.event_timeline_scroll.horizontalScrollBar().setSingleStep(self.event_timeline_widget.MONTH_WIDTH * 2)
@@ -941,22 +1164,15 @@ class PlannerWindow(QMainWindow):
 
     def _build_timeline_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("SectionCard")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 4, 0, 0)
-        layout.setSpacing(10)
-
-        title = QLabel("Value Timeline")
-        title.setContentsMargins(10, 6, 10, 0)
-        layout.addWidget(title)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(14)
 
         self.chart_container = QWidget()
         self.chart_layout = QVBoxLayout(self.chart_container)
         self.chart_layout.setContentsMargins(0, 4, 0, 4)
-        self.chart_layout.setSpacing(16)
-
-        self.scenario_chart_title = QLabel("Scenario Values")
-        self.scenario_chart_title.setContentsMargins(10, 0, 10, 0)
-        self.chart_layout.addWidget(self.scenario_chart_title)
+        self.chart_layout.setSpacing(18)
 
         self.timeline_widget = TimelineWidget(
             y_axis_interval=200.0,
@@ -966,10 +1182,6 @@ class PlannerWindow(QMainWindow):
             pin_events_to_zero=True,
         )
         self.chart_layout.addWidget(self.timeline_widget)
-
-        self.balance_chart_title = QLabel("Balances")
-        self.balance_chart_title.setContentsMargins(10, 0, 10, 0)
-        self.chart_layout.addWidget(self.balance_chart_title)
 
         self.balance_timeline_widget = TimelineWidget(
             y_axis_interval=20_000.0,
@@ -984,6 +1196,7 @@ class PlannerWindow(QMainWindow):
         self.timeline_scroll.setWidgetResizable(False)
         self.timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.timeline_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.timeline_scroll.setWidget(self.chart_container)
         self.timeline_scroll.horizontalScrollBar().setSingleStep(self.timeline_widget.X_AXIS_STEP_WIDTH * 2)
         layout.addWidget(self.timeline_scroll)
@@ -991,21 +1204,60 @@ class PlannerWindow(QMainWindow):
 
     def _build_results_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("WorkspacePage")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(0)
+
+        results_card = QFrame()
+        results_card.setObjectName("SectionCard")
+        card_layout = QVBoxLayout(results_card)
+        card_layout.setContentsMargins(20, 18, 20, 20)
+        card_layout.setSpacing(14)
 
         self.summary_label = QLabel("No simulation results yet.")
+        self.summary_label.setObjectName("SummaryLabel")
 
         self.results_table = QTableWidget(0, len(RESULT_HEADERS))
         self.results_table.setHorizontalHeaderLabels(RESULT_HEADERS)
+        self.results_table.setAlternatingRowColors(True)
         self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.results_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.results_table.setShowGrid(False)
         self.results_table.horizontalHeader().setStretchLastSection(True)
         self.results_table.verticalHeader().setVisible(False)
-        layout.setSpacing(10)
-        layout.addWidget(self.summary_label)
-        layout.addWidget(self.results_table, 1)
+        self.results_table.verticalHeader().setDefaultSectionSize(38)
+        card_layout.addWidget(self.summary_label)
+        card_layout.addWidget(self.results_table, 1)
+        layout.addWidget(results_card, 1)
         return panel
+
+    def _create_button(self, label: str, handler) -> QPushButton:
+        button = QPushButton(label)
+        button.setMinimumWidth(self.TOOLBAR_BUTTON_WIDTH)
+        button.setFixedHeight(self.TOOLBAR_BUTTON_HEIGHT)
+        button.clicked.connect(handler)
+        return button
+
+    def _create_field_block(self, label: str, widget: QWidget) -> QWidget:
+        block = QWidget()
+        block.setObjectName("FieldBlock")
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(8)
+        label_widget = QLabel(label)
+        label_widget.setObjectName("FieldLabel")
+        widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        layout.addWidget(label_widget)
+        layout.addWidget(widget)
+        return block
+
+    def _set_compact_width(self, widget: QWidget, sample_text: str, extra_padding: int) -> None:
+        metrics = widget.fontMetrics()
+        content_width = metrics.horizontalAdvance(sample_text)
+        target_width = max(widget.minimumSizeHint().width(), content_width + extra_padding)
+        widget.setFixedWidth(target_width)
 
     def _set_default_body_splitter_sizes(self) -> None:
         total_height = max(self.body_splitter.height(), 1)
@@ -1064,7 +1316,6 @@ class PlannerWindow(QMainWindow):
     def _set_dirty(self, dirty: bool) -> None:
         self.is_dirty = dirty
         self.setWindowModified(dirty)
-        self._update_scenario_name()
         self._update_window_title()
 
     def _enabled_item(self, enabled: bool) -> QTableWidgetItem:
@@ -1590,7 +1841,7 @@ class PlannerWindow(QMainWindow):
                 scenario_series.append(
                     ChartSeries(
                         name=flow.display_label,
-                        color=QColor("#2f8f63") if flow.target == FlowTarget.PORTFOLIO else QColor("#2e6ea6"),
+                        color=QColor(SUCCESS_COLOR) if flow.target == FlowTarget.PORTFOLIO else QColor(INFO_COLOR),
                         points=points,
                         series_type="flow",
                     )
@@ -1602,7 +1853,7 @@ class PlannerWindow(QMainWindow):
             scenario_series.append(
                 ChartSeries(
                     name=event.display_label,
-                    color=QColor("#d9822b"),
+                    color=QColor(WARNING_COLOR),
                     points=[ChartPoint(event.occurs_on, event.amount)],
                     series_type="event",
                 )
@@ -1611,7 +1862,7 @@ class PlannerWindow(QMainWindow):
         balance_specs = [
             ("Cash Balance", QColor("#4a5568"), "cash_balance"),
             ("Portfolio", QColor("#7f3c8d"), "portfolio_balance"),
-            ("Total", QColor("#111827"), "total_balance"),
+            ("Total", QColor(TEXT_COLOR), "total_balance"),
         ]
         for label, color, attribute in balance_specs:
             points = [
@@ -1665,7 +1916,7 @@ class PlannerWindow(QMainWindow):
                     name=flow.display_label,
                     start=flow.starts_on,
                     end=effective_end,
-                    color=QColor("#2f8f63") if flow.target == FlowTarget.PORTFOLIO else QColor("#2e6ea6"),
+                    color=QColor(SUCCESS_COLOR) if flow.target == FlowTarget.PORTFOLIO else QColor(INFO_COLOR),
                     item_type="recurring",
                 )
             )
@@ -1677,29 +1928,19 @@ class PlannerWindow(QMainWindow):
                     name=event.display_label,
                     start=event.occurs_on,
                     end=event.occurs_on,
-                    color=QColor("#d9822b"),
+                    color=QColor(WARNING_COLOR),
                     item_type="one_off",
                 )
             )
         return sorted(items, key=lambda item: (item.start, item.end, item.name))
 
     def _update_chart_container_size(self) -> None:
-        title_heights = self.scenario_chart_title.sizeHint().height() + self.balance_chart_title.sizeHint().height()
         spacing = self.chart_layout.spacing()
         chart_width = max(self.timeline_widget.sizeHint().width(), self.balance_timeline_widget.sizeHint().width())
         chart_height = self.timeline_widget.sizeHint().height() + self.balance_timeline_widget.sizeHint().height()
-        total_height = title_heights + chart_height + spacing * 3 + 8
+        total_height = chart_height + spacing + 8
         self.chart_container.setMinimumSize(chart_width, total_height)
         self.chart_container.resize(chart_width, total_height)
-
-    def _update_scenario_name(self) -> None:
-        if self.current_file is not None:
-            label = self.current_file.name
-        else:
-            label = "No scenario loaded"
-        if self.is_dirty:
-            label = f"* {label}"
-        self.scenario_name_label.setText(label)
 
     def _update_window_title(self) -> None:
         file_name = self.current_file.name if self.current_file is not None else "No scenario loaded"
@@ -1779,6 +2020,7 @@ def main() -> None:
     settings_store.ensure_exists()
 
     app = QApplication(sys.argv)
+    apply_app_theme(app)
     window = PlannerWindow(settings_store)
     startup_path: Path | None = None
 
