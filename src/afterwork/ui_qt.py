@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -240,8 +241,9 @@ class TimelineWidget(QWidget):
     TOP_MARGIN = 34
     BOTTOM_MARGIN = 34
     MIN_CHART_HEIGHT = 280
-    MONTH_WIDTH = 10
-    Y_AXIS_INTERVAL_HEIGHT = 10
+    X_AXIS_STEP_WIDTH = 20
+    X_AXIS_RESOLUTION_MONTHS = 6
+    Y_AXIS_INTERVAL_HEIGHT = 20
     
     def __init__(
         self,
@@ -277,8 +279,8 @@ class TimelineWidget(QWidget):
         self.update()
 
     def sizeHint(self) -> QSize:
-        months = self._timeline_months()
-        width = self.LEFT_MARGIN + self.RIGHT_MARGIN + max(months, 1) * self.MONTH_WIDTH
+        steps = self._timeline_steps()
+        width = self.LEFT_MARGIN + self.RIGHT_MARGIN + max(steps, 1) * self.X_AXIS_STEP_WIDTH
         height = self.TOP_MARGIN + self.BOTTOM_MARGIN + self._plot_height()
         return QSize(width, height)
 
@@ -307,7 +309,7 @@ class TimelineWidget(QWidget):
             painter.drawText(self.rect().adjusted(16, 16, -16, -16), "Timeline is unavailable until the scenario dates are valid.")
         else:
             self._draw_axes(painter)
-            self._draw_quarter_grid(painter)
+            self._draw_half_year_grid(painter)
             self._draw_series(painter)
 
         painter.end()
@@ -331,13 +333,17 @@ class TimelineWidget(QWidget):
             return 1
         return max(month_index(self.plan_start, self.plan_end) + 1, 1)
 
+    def _timeline_steps(self) -> int:
+        return max(math.ceil(self._timeline_months() / self.X_AXIS_RESOLUTION_MONTHS), 1)
+
     def _x_for_month(self, value: date, center: bool = False) -> int:
         if self.plan_start is None:
             return self.LEFT_MARGIN
         offset = max(month_index(self.plan_start, value), 0)
         if center:
             offset += 0.5
-        return round(self.LEFT_MARGIN + offset * self.MONTH_WIDTH)
+        position = offset / self.X_AXIS_RESOLUTION_MONTHS
+        return round(self.LEFT_MARGIN + position * self.X_AXIS_STEP_WIDTH)
 
     def _plot_top(self) -> int:
         return self.TOP_MARGIN
@@ -412,20 +418,29 @@ class TimelineWidget(QWidget):
             painter.setPen(QPen(QColor("#b8c0cb"), 1, Qt.PenStyle.DashLine))
             painter.drawLine(self.LEFT_MARGIN, zero_y, right_axis_x, zero_y)
 
-    def _draw_quarter_grid(self, painter: QPainter) -> None:
+    def _draw_half_year_grid(self, painter: QPainter) -> None:
         assert self.plan_start is not None
         total_months = self._timeline_months()
-        quarter_pen = QPen(QColor("#c1cad6"))
+        half_year_pen = QPen(QColor("#c1cad6"))
         label_pen = QPen(QColor("#5b6470"))
 
-        for month_offset in range(0, total_months + 1, 3):
+        for month_offset in range(0, total_months + 1, self.X_AXIS_RESOLUTION_MONTHS):
             tick_date = add_months(self.plan_start, month_offset)
-            x = self.LEFT_MARGIN + month_offset * self.MONTH_WIDTH
-            painter.setPen(quarter_pen)
+            x = round(self.LEFT_MARGIN + (month_offset / self.X_AXIS_RESOLUTION_MONTHS) * self.X_AXIS_STEP_WIDTH)
+            painter.setPen(half_year_pen)
             painter.drawLine(x, self._plot_top(), x, self._plot_bottom())
-            if tick_date.month == 1:
-                painter.setPen(label_pen)
-                painter.drawText(x + 4, 18, f"{tick_date.year}")
+
+        first_january_offset = 0
+        while first_january_offset <= total_months:
+            if add_months(self.plan_start, first_january_offset).month == 1:
+                break
+            first_january_offset += 1
+
+        for month_offset in range(first_january_offset, total_months + 1, 12):
+            tick_date = add_months(self.plan_start, month_offset)
+            x = round(self.LEFT_MARGIN + (month_offset / self.X_AXIS_RESOLUTION_MONTHS) * self.X_AXIS_STEP_WIDTH)
+            painter.setPen(label_pen)
+            painter.drawText(x + 4, 18, f"{tick_date.year}")
 
     def _draw_series(self, painter: QPainter) -> None:
         font_metrics = QFontMetrics(painter.font())
@@ -498,7 +513,7 @@ class TimelineWidget(QWidget):
     def _month_for_x(self, x_pos: int) -> date:
         assert self.plan_start is not None and self.plan_end is not None
         relative = x_pos - self.LEFT_MARGIN
-        month_offset = round(relative / self.MONTH_WIDTH)
+        month_offset = round(relative / self.X_AXIS_STEP_WIDTH * self.X_AXIS_RESOLUTION_MONTHS)
         month_offset = max(0, min(month_offset, self._timeline_months() - 1))
         return add_months(self.plan_start, month_offset)
 
@@ -696,22 +711,8 @@ class PlannerWindow(QMainWindow):
         )
         root_layout.addWidget(self.body_splitter, 1)
 
-        middle_content = QWidget()
-        middle_layout = QVBoxLayout(middle_content)
-        middle_layout.setContentsMargins(0, 0, 0, 0)
-        middle_layout.setSpacing(12)
-
-        self.scenario_panel = self._build_scenario_panel()
-        middle_layout.addWidget(self.scenario_panel, 1)
-
-        self.results_panel = self._build_results_panel()
-        middle_layout.addWidget(self.results_panel)
-
-        self.middle_scroll = QScrollArea()
-        self.middle_scroll.setWidgetResizable(True)
-        self.middle_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.middle_scroll.setWidget(middle_content)
-        self.body_splitter.addWidget(self.middle_scroll)
+        self.workspace_tabs = self._build_workspace_tabs()
+        self.body_splitter.addWidget(self.workspace_tabs)
 
         self.timeline_panel = self._build_timeline_panel()
         self.body_splitter.addWidget(self.timeline_panel)
@@ -814,6 +815,14 @@ class PlannerWindow(QMainWindow):
 
         return panel
 
+    def _build_workspace_tabs(self) -> QTabWidget:
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        tabs.addTab(self._build_scenario_panel(), "Event Table")
+        tabs.addTab(self._build_event_timeline_panel(), "Event Timeline")
+        tabs.addTab(self._build_results_panel(), "Simulation Table")
+        return tabs
+
     def _build_scenario_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -900,8 +909,15 @@ class PlannerWindow(QMainWindow):
         table_toolbar.addStretch()
         scenario_table_layout.addLayout(table_toolbar)
         scenario_table_layout.addWidget(self.scenario_table)
-        self.event_table_section = CollapsibleSection("Event Table", scenario_table_container, expanded=True)
-        layout.addWidget(self.event_table_section, 1)
+        layout.addWidget(scenario_table_container, 1)
+
+        return panel
+
+    def _build_event_timeline_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(12)
 
         self.event_timeline_widget = EventTimelineWidget()
         self.event_timeline_frame = QFrame()
@@ -919,8 +935,7 @@ class PlannerWindow(QMainWindow):
         self.event_timeline_scroll.setWidget(self.event_timeline_widget)
         self.event_timeline_scroll.horizontalScrollBar().setSingleStep(self.event_timeline_widget.MONTH_WIDTH * 2)
         event_timeline_layout.addWidget(self.event_timeline_scroll)
-        self.event_timeline_section = CollapsibleSection("Event Timeline", self.event_timeline_frame, expanded=False)
-        layout.addWidget(self.event_timeline_section)
+        layout.addWidget(self.event_timeline_frame, 1)
 
         return panel
 
@@ -944,8 +959,8 @@ class PlannerWindow(QMainWindow):
         self.chart_layout.addWidget(self.scenario_chart_title)
 
         self.timeline_widget = TimelineWidget(
-            y_axis_interval=100.0,
-            y_axis_label_interval=1_000.0,
+            y_axis_interval=200.0,
+            y_axis_label_interval=200.0,
             dynamic_height=True,
             include_event_values_in_scale=False,
             pin_events_to_zero=True,
@@ -970,7 +985,7 @@ class PlannerWindow(QMainWindow):
         self.timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.timeline_scroll.setWidget(self.chart_container)
-        self.timeline_scroll.horizontalScrollBar().setSingleStep(self.timeline_widget.MONTH_WIDTH * 2)
+        self.timeline_scroll.horizontalScrollBar().setSingleStep(self.timeline_widget.X_AXIS_STEP_WIDTH * 2)
         layout.addWidget(self.timeline_scroll)
         return panel
 
@@ -987,26 +1002,15 @@ class PlannerWindow(QMainWindow):
         self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.results_table.horizontalHeader().setStretchLastSection(True)
         self.results_table.verticalHeader().setVisible(False)
-
-        results_content = QWidget()
-        results_content_layout = QVBoxLayout(results_content)
-        results_content_layout.setContentsMargins(0, 4, 0, 4)
-        results_content_layout.setSpacing(10)
-        results_content_layout.addWidget(self.summary_label)
-        results_content_layout.addWidget(self.results_table)
-        self.results_section = CollapsibleSection("Simulation Table", results_content, expanded=False)
-        self.results_section.expanded_changed.connect(self._on_results_section_toggled)
-        layout.addWidget(self.results_section)
+        layout.setSpacing(10)
+        layout.addWidget(self.summary_label)
+        layout.addWidget(self.results_table, 1)
         return panel
 
     def _set_default_body_splitter_sizes(self) -> None:
         total_height = max(self.body_splitter.height(), 1)
         timeline_height = max(total_height // 3, 180)
         self.body_splitter.setSizes([max(total_height - timeline_height, 0), timeline_height])
-
-    def _on_results_section_toggled(self, _expanded: bool) -> None:
-        self.results_panel.updateGeometry()
-        self.middle_scroll.widget().adjustSize()
 
     def _connect_refresh_signals(self) -> None:
         self.scenario_table.itemChanged.connect(self._on_scenario_table_changed)
@@ -1570,11 +1574,11 @@ class PlannerWindow(QMainWindow):
     def _chart_series(self, plan: Plan, result, plan_end: date) -> tuple[list[ChartSeries], list[ChartSeries]]:
         scenario_series: list[ChartSeries] = []
         balance_series: list[ChartSeries] = []
-        quarterly_months = self._quarterly_months(plan.start_month, plan_end)
+        semiannual_months = self._semiannual_months(plan.start_month, plan_end)
 
         for flow, effective_end in self._effective_recurring_flows(plan, plan_end):
             points: list[ChartPoint] = []
-            for current_month in quarterly_months:
+            for current_month in semiannual_months:
                 if current_month < flow.starts_on or current_month > effective_end:
                     continue
                 if not flow.occurs_in_month(current_month):
@@ -1612,7 +1616,7 @@ class PlannerWindow(QMainWindow):
         for label, color, attribute in balance_specs:
             points = [
                 ChartPoint(record.month, getattr(record, attribute))
-                for record in result.records[::3]
+                for record in result.records[::6]
             ]
             if result.records and (not points or points[-1].month != result.records[-1].month):
                 points.append(ChartPoint(result.records[-1].month, getattr(result.records[-1], attribute)))
@@ -1621,7 +1625,7 @@ class PlannerWindow(QMainWindow):
 
         return scenario_series, balance_series
 
-    def _quarterly_months(self, plan_start: date, plan_end: date) -> list[date]:
+    def _semiannual_months(self, plan_start: date, plan_end: date) -> list[date]:
         months: list[date] = []
         offset = 0
         while True:
@@ -1629,7 +1633,7 @@ class PlannerWindow(QMainWindow):
             if current > plan_end:
                 break
             months.append(current)
-            offset += 3
+            offset += 6
         if not months or months[-1] != plan_end:
             months.append(plan_end)
         return months
