@@ -63,6 +63,7 @@ class RecurringFlow:
     target: FlowTarget = FlowTarget.CASH
     annual_adjustment_rate: float = 0.0
     enabled: bool = True
+    color: str | None = None
 
     def occurs_in_month(self, current_month: date) -> bool:
         if current_month < self.starts_on:
@@ -99,6 +100,7 @@ class OneOffEvent:
     category: str = "general"
     target: FlowTarget = FlowTarget.CASH
     enabled: bool = True
+    color: str | None = None
 
     def occurs_in_month(self, current_month: date) -> bool:
         return self.occurs_on.year == current_month.year and self.occurs_on.month == current_month.month

@@ -824,7 +824,7 @@ class TimelineWidget(QWidget):
 
     def sizeHint(self) -> QSize:
         steps = self._timeline_steps()
-        width = self.LEFT_MARGIN + self.RIGHT_MARGIN + max(steps, 1) * self.X_AXIS_STEP_WIDTH
+        width = self._left_margin() + self._right_margin() + max(steps, 1) * self.X_AXIS_STEP_WIDTH
         height = self.TOP_MARGIN + self.BOTTOM_MARGIN + self._plot_height()
         return QSize(width, height)
 
@@ -882,12 +882,12 @@ class TimelineWidget(QWidget):
 
     def _x_for_month(self, value: date, center: bool = False) -> int:
         if self.plan_start is None:
-            return self.LEFT_MARGIN
+            return self._left_margin()
         offset = max(month_index(self.plan_start, value), 0)
         if center:
             offset += 0.5
         position = offset / self.X_AXIS_RESOLUTION_MONTHS
-        return round(self.LEFT_MARGIN + position * self.X_AXIS_STEP_WIDTH)
+        return round(self._left_margin() + position * self.X_AXIS_STEP_WIDTH)
 
     def _plot_top(self) -> int:
         return self.TOP_MARGIN
@@ -926,12 +926,60 @@ class TimelineWidget(QWidget):
         position = max(0.0, min(position, 1.0))
         return round(self._plot_bottom() - position * plot_height)
 
+    def _axis_label_width(self) -> int:
+        minimum, maximum = self._value_range()
+        font_metrics = QFontMetrics(self.font())
+        return max(font_metrics.horizontalAdvance(f"{minimum:,.0f}"), font_metrics.horizontalAdvance(f"{maximum:,.0f}"))
+
+    def _left_margin(self) -> int:
+        return max(self.LEFT_MARGIN, self._axis_label_width() + 16)
+
+    def _right_margin(self) -> int:
+        return max(self.RIGHT_MARGIN, self._axis_label_width() + 40)
+
+    def _right_axis_x(self) -> int:
+        return self.width() - self._right_margin()
+
+    def _tick_values(self, minimum: float, maximum: float) -> list[float]:
+        interval = self.y_axis_interval
+        if interval <= 0:
+            return [minimum, maximum] if not math.isclose(minimum, maximum) else [minimum]
+
+        tick_values = [minimum]
+        current = math.ceil(minimum / interval) * interval
+        while current < maximum - 1e-9:
+            if not any(math.isclose(current, value, abs_tol=1e-9) for value in tick_values):
+                tick_values.append(current)
+            current += interval
+
+        if not any(math.isclose(maximum, value, abs_tol=1e-9) for value in tick_values):
+            tick_values.append(maximum)
+
+        if minimum < 0 < maximum and not any(math.isclose(0.0, value, abs_tol=1e-9) for value in tick_values):
+            tick_values.append(0.0)
+
+        tick_values.sort()
+        return tick_values
+
+    def _major_tick_values(self, tick_values: list[float], minimum: float, maximum: float) -> set[float]:
+        major_values = {
+            value
+            for value in tick_values
+            if abs(value - round(value / self.y_axis_label_interval) * self.y_axis_label_interval) < 1e-9
+        }
+        major_values.update({minimum, maximum})
+        if minimum < 0 < maximum:
+            major_values.add(0.0)
+        return major_values
+
     def _draw_axes(self, painter: QPainter) -> None:
         axis_pen = QPen(QColor("#a7b6c8"))
+        left_margin = self._left_margin()
+        right_margin = self._right_margin()
+        right_axis_x = self._right_axis_x()
         painter.setPen(axis_pen)
-        painter.drawLine(self.LEFT_MARGIN, self._plot_top(), self.LEFT_MARGIN, self._plot_bottom())
-        painter.drawLine(self.LEFT_MARGIN, self._plot_bottom(), self.width() - self.RIGHT_MARGIN + 30, self._plot_bottom())
-        right_axis_x = self.width() - self.RIGHT_MARGIN + 30
+        painter.drawLine(left_margin, self._plot_top(), left_margin, self._plot_bottom())
+        painter.drawLine(left_margin, self._plot_bottom(), right_axis_x, self._plot_bottom())
         painter.drawLine(right_axis_x, self._plot_top(), right_axis_x, self._plot_bottom())
 
         minimum, maximum = self._value_range()
@@ -940,42 +988,26 @@ class TimelineWidget(QWidget):
         grid_pen.setStyle(Qt.PenStyle.DashLine)
         major_grid_pen = QPen(QColor("#bfd0e2"))
         major_grid_pen.setStyle(Qt.PenStyle.SolidLine)
-        tick_values: list[float] = []
-        current = minimum
-        while current <= maximum + 0.1:
-            tick_values.append(current)
-            current += self.y_axis_interval
-        if minimum < 0 < maximum and all(abs(value) > 1e-9 for value in tick_values):
-            tick_values.append(0.0)
-            tick_values.sort()
-
-        major_values = {
-            value
-            for value in tick_values
-            if abs(value - round(value / self.y_axis_label_interval) * self.y_axis_label_interval) < 1e-9
-        }
-        if not major_values:
-            major_values.update({minimum, maximum})
-            if minimum < 0 < maximum:
-                major_values.add(0.0)
+        tick_values = self._tick_values(minimum, maximum)
+        major_values = self._major_tick_values(tick_values, minimum, maximum)
 
         for value in tick_values:
             y = self._y_for_value(value)
             is_major = any(abs(value - major_value) < 1e-9 for major_value in major_values)
             painter.setPen(major_grid_pen if is_major else grid_pen)
-            painter.drawLine(self.LEFT_MARGIN, y, right_axis_x, y)
+            painter.drawLine(left_margin, y, right_axis_x, y)
             painter.setPen(tick_pen)
-            painter.drawLine(self.LEFT_MARGIN - 5, y, self.LEFT_MARGIN, y)
+            painter.drawLine(left_margin - 5, y, left_margin, y)
             painter.drawLine(right_axis_x, y, right_axis_x + 5, y)
             if is_major:
                 label = f"{value:,.0f}"
-                painter.drawText(8, y + 5, label)
-                painter.drawText(right_axis_x + 8, y + 5, label)
+                painter.drawText(QRect(8, y - 10, left_margin - 16, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
+                painter.drawText(QRect(right_axis_x + 8, y - 10, right_margin - 16, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label)
 
         if minimum < 0 < maximum:
             zero_y = self._y_for_value(0.0)
             painter.setPen(QPen(QColor("#c0cddd"), 1, Qt.PenStyle.DashLine))
-            painter.drawLine(self.LEFT_MARGIN, zero_y, right_axis_x, zero_y)
+            painter.drawLine(left_margin, zero_y, right_axis_x, zero_y)
 
     def _draw_half_year_grid(self, painter: QPainter) -> None:
         assert self.plan_start is not None
@@ -985,7 +1017,7 @@ class TimelineWidget(QWidget):
 
         for month_offset in range(0, total_months + 1, self.X_AXIS_RESOLUTION_MONTHS):
             tick_date = add_months(self.plan_start, month_offset)
-            x = round(self.LEFT_MARGIN + (month_offset / self.X_AXIS_RESOLUTION_MONTHS) * self.X_AXIS_STEP_WIDTH)
+            x = round(self._left_margin() + (month_offset / self.X_AXIS_RESOLUTION_MONTHS) * self.X_AXIS_STEP_WIDTH)
             painter.setPen(half_year_pen)
             painter.drawLine(x, self._plot_top(), x, self._plot_bottom())
 
@@ -997,7 +1029,7 @@ class TimelineWidget(QWidget):
 
         for month_offset in range(first_january_offset, total_months + 1, 12):
             tick_date = add_months(self.plan_start, month_offset)
-            x = round(self.LEFT_MARGIN + (month_offset / self.X_AXIS_RESOLUTION_MONTHS) * self.X_AXIS_STEP_WIDTH)
+            x = round(self._left_margin() + (month_offset / self.X_AXIS_RESOLUTION_MONTHS) * self.X_AXIS_STEP_WIDTH)
             painter.setPen(label_pen)
             painter.drawText(x + 4, 18, f"{tick_date.year}")
 
@@ -1035,21 +1067,36 @@ class TimelineWidget(QWidget):
             painter.setBrush(QBrush(series.color))
             painter.drawEllipse(last_point[0] - 4, last_point[1] - 4, 8, 8)
 
-        if series.series_type == "flow" and len(series.points) > 1 and first_point is not None:
+        plot_right = self._right_axis_x() - 8
+        if series.series_type == "balance" and first_point is not None:
             painter.setPen(QPen(series.color.darker(135)))
-            start_label_x = min(first_point[0] + 10, self.width() - self.RIGHT_MARGIN + 12)
+            start_label_x = first_point[0] + 10
             start_label_y = first_point[1] - 6
+            start_label_width = max(plot_right - start_label_x, 48)
+            start_label = f"{series.name}: {series.points[0].value:,.0f}"
             painter.drawText(
                 start_label_x,
                 start_label_y,
-                font_metrics.elidedText(series.name, Qt.TextElideMode.ElideRight, self.RIGHT_MARGIN - 18),
+                font_metrics.elidedText(start_label, Qt.TextElideMode.ElideRight, start_label_width),
             )
 
-        if last_point is not None:
+        if series.series_type == "flow" and len(series.points) > 1 and first_point is not None:
             painter.setPen(QPen(series.color.darker(135)))
-            label_x = min(last_point[0] + 10, self.width() - self.RIGHT_MARGIN + 12)
+            start_label_x = first_point[0] + 10
+            start_label_y = first_point[1] - 6
+            start_label_width = max(plot_right - start_label_x, 24)
+            painter.drawText(
+                start_label_x,
+                start_label_y,
+                font_metrics.elidedText(series.name, Qt.TextElideMode.ElideRight, start_label_width),
+            )
+
+        if series.series_type != "balance" and last_point is not None:
+            painter.setPen(QPen(series.color.darker(135)))
+            label_x = last_point[0] + 10
             label_y = last_point[1] - 6
-            painter.drawText(label_x, label_y, font_metrics.elidedText(series.name, Qt.TextElideMode.ElideRight, self.RIGHT_MARGIN - 18))
+            label_width = max(plot_right - label_x, 24)
+            painter.drawText(label_x, label_y, font_metrics.elidedText(series.name, Qt.TextElideMode.ElideRight, label_width))
 
     def _draw_event_series(self, painter: QPainter, series: ChartSeries, font_metrics: QFontMetrics) -> None:
         painter.setPen(QPen(series.color.darker(130), 2))
@@ -1091,7 +1138,7 @@ class TimelineWidget(QWidget):
 
     def _month_for_x(self, x_pos: int) -> date:
         assert self.plan_start is not None and self.plan_end is not None
-        relative = x_pos - self.LEFT_MARGIN
+        relative = x_pos - self._left_margin()
         month_offset = round(relative / self.X_AXIS_STEP_WIDTH * self.X_AXIS_RESOLUTION_MONTHS)
         month_offset = max(0, min(month_offset, self._timeline_months() - 1))
         return add_months(self.plan_start, month_offset)
@@ -1106,7 +1153,7 @@ class TimelineWidget(QWidget):
         return minimum + position * (maximum - minimum)
 
     def _is_in_plot_area(self, pos: QPoint) -> bool:
-        return self.LEFT_MARGIN <= pos.x() <= self.width() - self.RIGHT_MARGIN + 30 and self._plot_top() <= pos.y() <= self._plot_bottom()
+        return self._left_margin() <= pos.x() <= self._right_axis_x() and self._plot_top() <= pos.y() <= self._plot_bottom()
 
 
 @dataclass(frozen=True)
@@ -2155,6 +2202,7 @@ class PlannerWindow(QMainWindow):
                         category=category,
                         annual_adjustment_rate=float(adjustment_rate or 0.0) / 100.0,
                         enabled=enabled,
+                        color=self._scenario_color(row),
                     )
                 )
             elif item_type == "OneOffEvent":
@@ -2165,6 +2213,7 @@ class PlannerWindow(QMainWindow):
                         occurs_on=self._resolve_date_reference(start),
                         category=category,
                         enabled=enabled,
+                        color=self._scenario_color(row),
                     )
                 )
             else:
@@ -2312,7 +2361,7 @@ class PlannerWindow(QMainWindow):
                             flow.enabled,
                             "RecurringFlow",
                             flow.category,
-                            self._flow_series_color(self.scenario_table.rowCount()).name().upper(),
+                            str(flow.color or self._flow_series_color(self.scenario_table.rowCount()).name().upper()),
                             str(flow.amount),
                             flow.target.value,
                             flow.frequency.value,
@@ -2327,7 +2376,7 @@ class PlannerWindow(QMainWindow):
                             event.enabled,
                             "OneOffEvent",
                             event.category,
-                            QColor(WARNING_COLOR).name().upper(),
+                            str(event.color or QColor(WARNING_COLOR).name().upper()),
                             str(event.amount),
                             event.target.value,
                             "",
@@ -2507,12 +2556,16 @@ class PlannerWindow(QMainWindow):
         return QColor(FLOW_SERIES_COLORS[index % len(FLOW_SERIES_COLORS)])
 
     def _flow_color_for_flow(self, flow: RecurringFlow, *, fallback_index: int) -> QColor:
+        if flow.color and QColor(flow.color).isValid():
+            return QColor(flow.color)
         color_hex = self._scenario_table_color_for_flow(flow)
         if color_hex is None:
             return self._flow_series_color(fallback_index)
         return QColor(color_hex)
 
     def _flow_color_for_event(self, event: OneOffEvent) -> QColor:
+        if event.color and QColor(event.color).isValid():
+            return QColor(event.color)
         color_hex = self._scenario_table_color_for_event(event)
         if color_hex is None:
             return QColor(WARNING_COLOR)

@@ -40,6 +40,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                 "target": flow.target.value,
                 "annual_adjustment_rate": flow.annual_adjustment_rate,
                 "enabled": flow.enabled,
+                "color": flow.color,
             }
             for flow in plan.recurring_flows
         ],
@@ -50,6 +51,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                 "category": event.category,
                 "target": event.target.value,
                 "enabled": event.enabled,
+                "color": event.color,
             }
             for event in plan.one_off_events
         ],
@@ -67,6 +69,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
             target=FlowTarget(item.get("target", FlowTarget.CASH.value)),
             annual_adjustment_rate=float(item.get("annual_adjustment_rate", 0.0)),
             enabled=bool(item.get("enabled", True)),
+            color=item.get("color"),
         )
         for item in data.get("recurring_flows", [])
     ]
@@ -77,6 +80,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
             category=item.get("category", "general"),
             target=FlowTarget(item.get("target", FlowTarget.CASH.value)),
             enabled=bool(item.get("enabled", True)),
+            color=item.get("color"),
         )
         for item in data.get("one_off_events", [])
     ]
