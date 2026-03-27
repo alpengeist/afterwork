@@ -145,6 +145,12 @@ QLabel#SummaryLabel {{
     padding: 4px 2px 8px 2px;
 }}
 
+QLabel#WarningLabel {{
+    color: {DANGER_COLOR};
+    font-weight: 600;
+    padding: 10px 2px 0 2px;
+}}
+
 QPushButton {{
     min-height: 40px;
     padding: 0 16px;
@@ -790,6 +796,7 @@ class TimelineWidget(QWidget):
         dynamic_height: bool = True,
         include_event_values_in_scale: bool = True,
         pin_events_to_zero: bool = False,
+        negative_floor_intervals: float | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan_start: date | None = None
@@ -801,6 +808,7 @@ class TimelineWidget(QWidget):
         self.dynamic_height = dynamic_height
         self.include_event_values_in_scale = include_event_values_in_scale
         self.pin_events_to_zero = pin_events_to_zero
+        self.negative_floor_intervals = negative_floor_intervals
         self._hover_pos: QPoint | None = None
         self.setMouseTracking(True)
 
@@ -905,6 +913,8 @@ class TimelineWidget(QWidget):
         interval = self.y_axis_interval
         minimum_tick = math.floor(minimum / interval) * interval
         maximum_tick = math.ceil(maximum / interval) * interval
+        if self.negative_floor_intervals is not None and minimum_tick < 0 < maximum_tick:
+            minimum_tick = max(minimum_tick, -self.negative_floor_intervals * interval)
         if minimum_tick == maximum_tick:
             maximum_tick = minimum_tick + interval
         return minimum_tick, maximum_tick
@@ -913,6 +923,7 @@ class TimelineWidget(QWidget):
         minimum, maximum = self._value_range()
         plot_height = self._plot_bottom() - self._plot_top()
         position = 0.5 if maximum == minimum else (value - minimum) / (maximum - minimum)
+        position = max(0.0, min(position, 1.0))
         return round(self._plot_bottom() - position * plot_height)
 
     def _draw_axes(self, painter: QPainter) -> None:
@@ -1208,6 +1219,8 @@ class PlannerWindow(QMainWindow):
     TOOLBAR_BUTTON_WIDTH = 132
     TOOLBAR_BUTTON_HEIGHT = 40
     AUTOSAVE_DELAY_MS = 1200
+    START_MONTH_LABEL = "start"
+    START_MONTH_REFERENCE = "start_month"
     RETIREMENT_MONTH_LABEL = "retirement"
     RETIREMENT_MONTH_REFERENCE = "retirement_month"
     SCENARIO_CATEGORY_COLUMN = 2
@@ -1290,6 +1303,7 @@ class PlannerWindow(QMainWindow):
         tabs.addTab(self._build_scenario_panel(), "Event Table")
         tabs.addTab(self._build_event_timeline_panel(), "Event Timeline")
         tabs.addTab(self._build_results_panel(), "Simulation Table")
+        tabs.setCurrentIndex(1)
         return tabs
 
     def _build_assumptions_panel(self) -> QWidget:
@@ -1458,6 +1472,7 @@ class PlannerWindow(QMainWindow):
             dynamic_height=True,
             include_event_values_in_scale=False,
             pin_events_to_zero=False,
+            negative_floor_intervals=0.5,
         )
         self.chart_layout.addWidget(self.balance_timeline_widget)
         self.chart_layout.addWidget(self.timeline_widget)
@@ -1470,6 +1485,10 @@ class PlannerWindow(QMainWindow):
         self.timeline_scroll.setWidget(self.chart_container)
         self.timeline_scroll.horizontalScrollBar().setSingleStep(self.timeline_widget.X_AXIS_STEP_WIDTH * 2)
         layout.addWidget(self.timeline_scroll)
+        self.zero_balance_warning_label = QLabel("")
+        self.zero_balance_warning_label.setObjectName("WarningLabel")
+        self.zero_balance_warning_label.hide()
+        layout.addWidget(self.zero_balance_warning_label)
         return panel
 
     def _build_results_panel(self) -> QWidget:
@@ -1752,10 +1771,12 @@ class PlannerWindow(QMainWindow):
         self.refresh_timeline()
 
     def _date_reference_options(self) -> list[str]:
-        return [self.RETIREMENT_MONTH_LABEL]
+        return [self.START_MONTH_LABEL, self.RETIREMENT_MONTH_LABEL]
 
     def _resolve_date_reference(self, value: str) -> date:
         text = value.strip()
+        if text in {self.START_MONTH_LABEL, self.START_MONTH_REFERENCE}:
+            return date.fromisoformat(self.start_month_edit.text().strip())
         if text in {self.RETIREMENT_MONTH_LABEL, self.RETIREMENT_MONTH_REFERENCE}:
             return date.fromisoformat(self.retirement_month_edit.text().strip())
         return date.fromisoformat(text)
@@ -2302,6 +2323,7 @@ class PlannerWindow(QMainWindow):
             self.timeline_widget.set_timeline(None, None, [])
             self.balance_timeline_widget.set_timeline(None, None, [])
             self.event_timeline_widget.set_timeline(None, None, [])
+            self._update_zero_balance_warning(None)
             return
 
         plan_end = add_months(plan.start_month, max(plan.simulation_months() - 1, 0))
@@ -2311,12 +2333,14 @@ class PlannerWindow(QMainWindow):
             self.timeline_widget.set_timeline(None, None, [])
             self.balance_timeline_widget.set_timeline(None, None, [])
             self.event_timeline_widget.set_timeline(None, None, [])
+            self._update_zero_balance_warning(None)
             return
 
         scenario_series, balance_series = self._chart_series(plan, result, plan_end)
         self.timeline_widget.set_timeline(plan.start_month, plan_end, scenario_series)
         self.balance_timeline_widget.set_timeline(plan.start_month, plan_end, balance_series)
         self.event_timeline_widget.set_timeline(plan.start_month, plan_end, self._event_timeline_items(plan, plan_end))
+        self._update_zero_balance_warning(self._first_total_balance_zero_date(result))
         self._update_chart_container_size()
 
     def _chart_series(self, plan: Plan, result, plan_end: date) -> tuple[list[ChartSeries], list[ChartSeries]]:
@@ -2365,10 +2389,8 @@ class PlannerWindow(QMainWindow):
         for label, color, attribute in balance_specs:
             points = [
                 ChartPoint(record.month, getattr(record, attribute))
-                for record in result.records[::6]
+                for record in result.records
             ]
-            if result.records and (not points or points[-1].month != result.records[-1].month):
-                points.append(ChartPoint(result.records[-1].month, getattr(result.records[-1], attribute)))
             if points:
                 balance_series.append(ChartSeries(name=label, color=color, points=points, series_type="balance"))
 
@@ -2432,6 +2454,22 @@ class PlannerWindow(QMainWindow):
                 )
             )
         return sorted(items, key=lambda item: (item.start, item.end, item.name))
+
+    def _first_total_balance_zero_date(self, result) -> date | None:
+        for record in result.records:
+            if record.total_balance <= 0:
+                return record.month
+        return None
+
+    def _update_zero_balance_warning(self, zero_date: date | None) -> None:
+        if zero_date is None:
+            self.zero_balance_warning_label.hide()
+            self.zero_balance_warning_label.setText("")
+            return
+        self.zero_balance_warning_label.setText(
+            f"Warning: total value reaches zero on {zero_date.isoformat()}."
+        )
+        self.zero_balance_warning_label.show()
 
     def _flow_series_color(self, index: int) -> QColor:
         return QColor(FLOW_SERIES_COLORS[index % len(FLOW_SERIES_COLORS)])
