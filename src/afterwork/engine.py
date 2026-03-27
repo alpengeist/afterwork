@@ -37,7 +37,7 @@ class SimulationEngine:
                 successor_start = replacement_starts.get(id(flow))
                 if successor_start is not None and current_month >= successor_start:
                     continue
-                adjusted_amount = flow.nominal_amount_for_period(period_index)
+                adjusted_amount = flow.nominal_amount_for_month(plan.start_month, current_month)
 
                 if flow.target == FlowTarget.CASH:
                     cash_flow_nominal += adjusted_amount

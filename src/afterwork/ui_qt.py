@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from afterwork import (
+    AmountBasis,
     FlowTarget,
     Frequency,
     OneOffEvent,
@@ -58,7 +59,7 @@ from afterwork.app_settings import SettingsStore
 from afterwork.domain import add_months, month_index
 
 
-SCENARIO_HEADERS = ["Active", "Type", "Category", "Color", "Amount", "Target", "Frequency", "Start", "End", "Yearly Adj. %"]
+SCENARIO_HEADERS = ["Active", "Type", "Category", "Color", "Amount", "Basis", "Target", "Frequency", "Start", "End", "Yearly Adj. %"]
 RESULT_HEADERS = [
     "Month",
     "Age",
@@ -72,6 +73,7 @@ RESULT_HEADERS = [
     "Flows",
 ]
 FREQUENCY_OPTIONS = [frequency.value for frequency in Frequency]
+AMOUNT_BASIS_OPTIONS = [basis.value for basis in AmountBasis]
 TARGET_OPTIONS = [target.value for target in FlowTarget]
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 STEP_PLUS_ICON = (ASSET_DIR / "step-plus.svg").as_posix()
@@ -469,16 +471,23 @@ class TableTextDelegate(QStyledItemDelegate):
 class ScenarioTableDelegate(TableTextDelegate):
     ITEM_TYPE_COLUMN = 1
     COLOR_COLUMN = 3
-    TARGET_COLUMN = 5
-    FREQUENCY_COLUMN = 6
-    START_COLUMN = 7
-    END_COLUMN = 8
+    AMOUNT_BASIS_COLUMN = 5
+    TARGET_COLUMN = 6
+    FREQUENCY_COLUMN = 7
+    START_COLUMN = 8
+    END_COLUMN = 9
 
     def __init__(self, parent: QWidget | None = None, *, date_reference_options: callable | None = None):
         super().__init__(parent)
         self._date_reference_options = date_reference_options
 
     def createEditor(self, parent, option, index):
+        if index.column() == self.AMOUNT_BASIS_COLUMN:
+            item_type = (index.siblingAtColumn(self.ITEM_TYPE_COLUMN).data() or "").strip()
+            if item_type != "RecurringFlow":
+                return None
+            return self._create_combo_editor(parent, option, index, AMOUNT_BASIS_OPTIONS)
+
         if index.column() == self.TARGET_COLUMN:
             return self._create_combo_editor(parent, option, index, TARGET_OPTIONS)
 
@@ -1284,12 +1293,13 @@ class PlannerWindow(QMainWindow):
     RETIREMENT_MONTH_REFERENCE = "retirement_month"
     SCENARIO_CATEGORY_COLUMN = 2
     SCENARIO_COLOR_COLUMN = 3
-    SCENARIO_START_COLUMN = 7
-    SCENARIO_END_COLUMN = 8
     SCENARIO_AMOUNT_COLUMN = 4
-    SCENARIO_TARGET_COLUMN = 5
-    SCENARIO_FREQUENCY_COLUMN = 6
-    SCENARIO_ADJUSTMENT_COLUMN = 9
+    SCENARIO_AMOUNT_BASIS_COLUMN = 5
+    SCENARIO_TARGET_COLUMN = 6
+    SCENARIO_FREQUENCY_COLUMN = 7
+    SCENARIO_START_COLUMN = 8
+    SCENARIO_END_COLUMN = 9
+    SCENARIO_ADJUSTMENT_COLUMN = 10
     ACTIVE_SYMBOL = "✓"
     INACTIVE_SYMBOL = "✕"
 
@@ -1479,11 +1489,12 @@ class PlannerWindow(QMainWindow):
         self.scenario_table.setColumnWidth(2, 140)
         self.scenario_table.setColumnWidth(3, 92)
         self.scenario_table.setColumnWidth(4, 90)
-        self.scenario_table.setColumnWidth(5, 90)
-        self.scenario_table.setColumnWidth(6, 100)
-        self.scenario_table.setColumnWidth(7, 110)
+        self.scenario_table.setColumnWidth(5, 100)
+        self.scenario_table.setColumnWidth(6, 90)
+        self.scenario_table.setColumnWidth(7, 100)
         self.scenario_table.setColumnWidth(8, 110)
         self.scenario_table.setColumnWidth(9, 110)
+        self.scenario_table.setColumnWidth(10, 110)
         table_toolbar = QHBoxLayout()
         table_toolbar.setContentsMargins(0, 0, 0, 0)
         table_toolbar.setSpacing(10)
@@ -1639,6 +1650,7 @@ class PlannerWindow(QMainWindow):
         if self._suspend_change_tracking:
             return
         if _item.column() == 1:
+            self._sync_amount_basis_cell(_item.row())
             self._sync_frequency_cell(_item.row())
         if self._scenario_sort_column is not None and _item.column() in {
             self.SCENARIO_CATEGORY_COLUMN,
@@ -1728,6 +1740,7 @@ class PlannerWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, row_id)
             self.scenario_table.setItem(row, column, item)
         self._set_scenario_row_enabled(row, bool(values[0]), update_dirty=False)
+        self._sync_amount_basis_cell(row)
         self._sync_target_cell(row)
         self._sync_frequency_cell(row)
         self._apply_scenario_row_style(row)
@@ -1772,7 +1785,7 @@ class PlannerWindow(QMainWindow):
             item.setForeground(symbol_color if column == 0 else text_color)
             item.setBackground(disabled_background if not enabled else QBrush())
 
-        for column in (self.SCENARIO_TARGET_COLUMN, self.SCENARIO_FREQUENCY_COLUMN):
+        for column in (self.SCENARIO_AMOUNT_BASIS_COLUMN, self.SCENARIO_TARGET_COLUMN, self.SCENARIO_FREQUENCY_COLUMN):
             widget = self.scenario_table.cellWidget(row, column)
             if isinstance(widget, QComboBox):
                 self._apply_scenario_combo_style(widget, enabled=enabled)
@@ -1812,13 +1825,14 @@ class PlannerWindow(QMainWindow):
             self._scenario_enabled(row),
             self._scenario_value(row, 1),
             self._scenario_value(row, 2),
-            self._scenario_value(row, 3),
+            self._scenario_color(row),
             self._scenario_value(row, 4),
             self._scenario_value(row, 5),
             self._scenario_value(row, 6),
             self._scenario_value(row, 7),
             self._scenario_value(row, 8),
             self._scenario_value(row, 9),
+            self._scenario_value(row, 10),
         ]
 
     def _scenario_color(self, row: int) -> str:
@@ -1870,11 +1884,12 @@ class PlannerWindow(QMainWindow):
                         "category": str(values[2]),
                         "color": str(values[3]),
                         "amount": str(values[4]),
-                        "target": str(values[5]),
-                        "frequency": str(values[6]),
-                        "start": str(values[7]),
-                        "end": str(values[8]),
-                        "adjustment_rate": str(values[9]),
+                        "amount_basis": str(values[5]),
+                        "target": str(values[6]),
+                        "frequency": str(values[7]),
+                        "start": str(values[8]),
+                        "end": str(values[9]),
+                        "adjustment_rate": str(values[10]),
                     }
                     for values in (
                         self._scenario_row_values(row)
@@ -2040,6 +2055,46 @@ class PlannerWindow(QMainWindow):
         item.setData(SCENARIO_COMBO_VALUE_ROLE, value)
         item.setText("")
 
+    def _sync_amount_basis_cell(self, row: int) -> None:
+        item = self.scenario_table.item(row, self.SCENARIO_AMOUNT_BASIS_COLUMN)
+        if item is None:
+            item = QTableWidgetItem("")
+            self.scenario_table.setItem(row, self.SCENARIO_AMOUNT_BASIS_COLUMN, item)
+
+        is_recurring_flow = self._scenario_value(row, 1) == "RecurringFlow"
+        flags = item.flags() | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+        previous_suspend = self._suspend_change_tracking
+        self._suspend_change_tracking = True
+        try:
+            if is_recurring_flow:
+                value = self._scenario_combo_item_value(item, AmountBasis.NOMINAL.value)
+                if value not in AMOUNT_BASIS_OPTIONS:
+                    value = AmountBasis.NOMINAL.value
+                self._set_scenario_combo_item_value(item, value)
+                item.setFlags(flags & ~Qt.ItemFlag.ItemIsEditable)
+            else:
+                self._set_scenario_combo_item_value(item, "")
+                item.setFlags(flags & ~Qt.ItemFlag.ItemIsEditable)
+        finally:
+            self._suspend_change_tracking = previous_suspend
+
+        if is_recurring_flow:
+            combo = self.scenario_table.cellWidget(row, self.SCENARIO_AMOUNT_BASIS_COLUMN)
+            if not isinstance(combo, QComboBox):
+                combo = self._create_scenario_combo_widget(row, self.SCENARIO_AMOUNT_BASIS_COLUMN, AMOUNT_BASIS_OPTIONS)
+                self.scenario_table.setCellWidget(row, self.SCENARIO_AMOUNT_BASIS_COLUMN, combo)
+            combo.blockSignals(True)
+            combo.setCurrentText(self._scenario_combo_item_value(item, AmountBasis.NOMINAL.value))
+            self._apply_scenario_combo_style(combo, enabled=self._scenario_enabled(row))
+            combo.blockSignals(False)
+            return
+
+        existing = self.scenario_table.cellWidget(row, self.SCENARIO_AMOUNT_BASIS_COLUMN)
+        if existing is not None:
+            existing.deleteLater()
+            self.scenario_table.removeCellWidget(row, self.SCENARIO_AMOUNT_BASIS_COLUMN)
+
     def _sync_target_cell(self, row: int) -> None:
         item = self.scenario_table.item(row, self.SCENARIO_TARGET_COLUMN)
         if item is None:
@@ -2117,9 +2172,10 @@ class PlannerWindow(QMainWindow):
                     "general",
                     self._flow_series_color(self.scenario_table.rowCount()).name().upper(),
                     "0",
+                    AmountBasis.NOMINAL.value,
                     "cash",
                     "monthly",
-                    self.start_month_edit.text(),
+                    self.START_MONTH_LABEL,
                     "",
                     "0.0",
                 ]
@@ -2140,9 +2196,10 @@ class PlannerWindow(QMainWindow):
                     "general",
                     QColor(WARNING_COLOR).name().upper(),
                     "0",
+                    "",
                     "cash",
                     "",
-                    self.start_month_edit.text(),
+                    self.START_MONTH_LABEL,
                     "",
                     "",
                 ]
@@ -2165,7 +2222,7 @@ class PlannerWindow(QMainWindow):
         item = self.scenario_table.item(row, column)
         if item is None:
             return ""
-        if column in {self.SCENARIO_TARGET_COLUMN, self.SCENARIO_FREQUENCY_COLUMN}:
+        if column in {self.SCENARIO_AMOUNT_BASIS_COLUMN, self.SCENARIO_TARGET_COLUMN, self.SCENARIO_FREQUENCY_COLUMN}:
             widget = self.scenario_table.cellWidget(row, column)
             if isinstance(widget, QComboBox):
                 return widget.currentText().strip()
@@ -2185,6 +2242,7 @@ class PlannerWindow(QMainWindow):
             item_type = self._scenario_value(row, 1)
             category = self._scenario_value(row, 2) or "general"
             amount = self._scenario_value(row, self.SCENARIO_AMOUNT_COLUMN)
+            amount_basis = self._scenario_value(row, self.SCENARIO_AMOUNT_BASIS_COLUMN)
             target = self._scenario_value(row, self.SCENARIO_TARGET_COLUMN)
             frequency = self._scenario_value(row, self.SCENARIO_FREQUENCY_COLUMN)
             start = self._scenario_value(row, self.SCENARIO_START_COLUMN)
@@ -2200,6 +2258,7 @@ class PlannerWindow(QMainWindow):
                         starts_on=self._resolve_date_reference(start),
                         ends_on=self._resolve_date_reference(end) if end else None,
                         category=category,
+                        amount_basis=AmountBasis(amount_basis or AmountBasis.NOMINAL.value),
                         annual_adjustment_rate=float(adjustment_rate or 0.0) / 100.0,
                         enabled=enabled,
                         color=self._scenario_color(row),
@@ -2337,16 +2396,41 @@ class PlannerWindow(QMainWindow):
 
             self.scenario_table.setRowCount(0)
             if isinstance(scenario_rows, list) and scenario_rows:
+                flow_index = 0
+                event_index = 0
                 for row in scenario_rows:
                     if not isinstance(row, dict):
                         continue
+                    row_type = str(row.get("type", ""))
+                    color = str(row.get("color", "")).strip()
+                    amount_basis = str(row.get("amount_basis", "")).strip()
+                    if not QColor(color).isValid():
+                        if row_type == "RecurringFlow" and flow_index < len(plan.recurring_flows):
+                            fallback_flow = plan.recurring_flows[flow_index]
+                            fallback_color = fallback_flow.color
+                            color = str(fallback_color or self._flow_series_color(flow_index).name().upper())
+                            amount_basis = amount_basis or fallback_flow.amount_basis.value
+                        elif row_type == "OneOffEvent" and event_index < len(plan.one_off_events):
+                            fallback_color = plan.one_off_events[event_index].color
+                            color = str(fallback_color or QColor(WARNING_COLOR).name().upper())
+                        else:
+                            color = self._flow_series_color(0).name().upper()
+                    elif row_type == "RecurringFlow" and flow_index < len(plan.recurring_flows):
+                        amount_basis = amount_basis or plan.recurring_flows[flow_index].amount_basis.value
+
+                    if row_type != "RecurringFlow":
+                        amount_basis = ""
+                    elif amount_basis not in AMOUNT_BASIS_OPTIONS:
+                        amount_basis = AmountBasis.NOMINAL.value
+
                     self._append_scenario_row(
                         [
                             bool(row.get("enabled", True)),
-                            str(row.get("type", "")),
+                            row_type,
                             str(row.get("category", "general")),
-                            str(row.get("color", self._flow_series_color(0).name().upper())),
+                            color,
                             str(row.get("amount", "0")),
+                            amount_basis,
                             str(row.get("target", FlowTarget.CASH.value)),
                             str(row.get("frequency", "")),
                             str(row.get("start", "")),
@@ -2354,6 +2438,10 @@ class PlannerWindow(QMainWindow):
                             str(row.get("adjustment_rate", "")),
                         ]
                     )
+                    if row_type == "RecurringFlow":
+                        flow_index += 1
+                    elif row_type == "OneOffEvent":
+                        event_index += 1
             else:
                 for flow in plan.recurring_flows:
                     self._append_scenario_row(
@@ -2363,6 +2451,7 @@ class PlannerWindow(QMainWindow):
                             flow.category,
                             str(flow.color or self._flow_series_color(self.scenario_table.rowCount()).name().upper()),
                             str(flow.amount),
+                            flow.amount_basis.value,
                             flow.target.value,
                             flow.frequency.value,
                             flow.starts_on.isoformat(),
@@ -2378,6 +2467,7 @@ class PlannerWindow(QMainWindow):
                             event.category,
                             str(event.color or QColor(WARNING_COLOR).name().upper()),
                             str(event.amount),
+                            "",
                             event.target.value,
                             "",
                             event.occurs_on.isoformat(),
@@ -2437,8 +2527,7 @@ class PlannerWindow(QMainWindow):
                     continue
                 if not flow.occurs_in_month(current_month):
                     continue
-                periods = month_index(plan.start_month, current_month)
-                points.append(ChartPoint(current_month, flow.nominal_amount_for_period(periods)))
+                points.append(ChartPoint(current_month, flow.nominal_amount_for_month(plan.start_month, current_month)))
 
             if points:
                 scenario_series.append(
@@ -2579,6 +2668,7 @@ class PlannerWindow(QMainWindow):
                 if (
                     self._scenario_value(row, 2) == flow.category
                     and float(self._scenario_value(row, self.SCENARIO_AMOUNT_COLUMN)) == float(flow.amount)
+                    and self._scenario_value(row, self.SCENARIO_AMOUNT_BASIS_COLUMN) == flow.amount_basis.value
                     and self._scenario_value(row, self.SCENARIO_TARGET_COLUMN) == flow.target.value
                     and self._scenario_value(row, self.SCENARIO_FREQUENCY_COLUMN) == flow.frequency.value
                     and self._resolve_date_reference(self._scenario_value(row, self.SCENARIO_START_COLUMN)) == flow.starts_on

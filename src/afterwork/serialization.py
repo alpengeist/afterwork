@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from afterwork.domain import FlowTarget, Frequency, OneOffEvent, Person, Plan, Portfolio, RecurringFlow
+from afterwork.domain import AmountBasis, FlowTarget, Frequency, OneOffEvent, Person, Plan, Portfolio, RecurringFlow
 
 
 def _date_to_str(value: date) -> str:
@@ -38,6 +38,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
                 "ends_on": _date_to_str(flow.ends_on) if flow.ends_on else None,
                 "category": flow.category,
                 "target": flow.target.value,
+                "amount_basis": flow.amount_basis.value,
                 "annual_adjustment_rate": flow.annual_adjustment_rate,
                 "enabled": flow.enabled,
                 "color": flow.color,
@@ -67,6 +68,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
             ends_on=_date_from_str(item["ends_on"]) if item.get("ends_on") else None,
             category=item.get("category", "general"),
             target=FlowTarget(item.get("target", FlowTarget.CASH.value)),
+            amount_basis=AmountBasis(item.get("amount_basis", AmountBasis.NOMINAL.value)),
             annual_adjustment_rate=float(item.get("annual_adjustment_rate", 0.0)),
             enabled=bool(item.get("enabled", True)),
             color=item.get("color"),

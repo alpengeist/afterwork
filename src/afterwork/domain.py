@@ -15,6 +15,11 @@ class FlowTarget(StrEnum):
     PORTFOLIO = "portfolio"
 
 
+class AmountBasis(StrEnum):
+    REAL = "Real"
+    NOMINAL = "Nominal"
+
+
 def month_index(start_month: date, current_month: date) -> int:
     return (current_month.year - start_month.year) * 12 + (current_month.month - start_month.month)
 
@@ -61,6 +66,7 @@ class RecurringFlow:
     ends_on: date | None = None
     category: str = "general"
     target: FlowTarget = FlowTarget.CASH
+    amount_basis: AmountBasis = AmountBasis.NOMINAL
     annual_adjustment_rate: float = 0.0
     enabled: bool = True
     color: str | None = None
@@ -86,7 +92,12 @@ class RecurringFlow:
     def monthly_adjustment_rate(self) -> float:
         return (1 + self.annual_adjustment_rate) ** (1 / 12) - 1
 
-    def nominal_amount_for_period(self, periods: int) -> float:
+    def adjustment_periods(self, plan_start: date, current_month: date) -> int:
+        anchor = plan_start if self.amount_basis == AmountBasis.REAL else self.starts_on
+        return max(month_index(anchor, current_month), 0)
+
+    def nominal_amount_for_month(self, plan_start: date, current_month: date) -> float:
+        periods = self.adjustment_periods(plan_start, current_month)
         return self.amount * ((1 + self.monthly_adjustment_rate) ** periods)
 
     def present_value(self, nominal_amount: float, periods: int) -> float:
