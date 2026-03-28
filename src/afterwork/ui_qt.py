@@ -1659,7 +1659,6 @@ class PlannerWindow(QMainWindow):
         }:
             self._sort_scenario_table(select_row_id=self._scenario_row_id(_item.row()))
         self._mark_dirty()
-        self.refresh_timeline()
 
     def _on_scenario_cell_clicked(self, row: int, column: int) -> None:
         if self._suspend_change_tracking:
@@ -1667,7 +1666,6 @@ class PlannerWindow(QMainWindow):
         if column == 0:
             self._set_scenario_row_enabled(row, not self._scenario_enabled(row))
             self._mark_dirty()
-            self.refresh_timeline()
             return
         if column == self.SCENARIO_COLOR_COLUMN:
             self._edit_scenario_row_color(row)
@@ -1685,7 +1683,6 @@ class PlannerWindow(QMainWindow):
 
         self._sort_scenario_table(select_row_id=self._selected_scenario_row_id())
         self._update_scenario_sort_indicator()
-        self.refresh_timeline()
 
     def _on_plan_input_changed(self, *_args) -> None:
         if self._suspend_change_tracking:
@@ -1857,7 +1854,6 @@ class PlannerWindow(QMainWindow):
         finally:
             self._suspend_change_tracking = previous_suspend
         self._mark_dirty()
-        self.refresh_timeline()
 
     def _date_reference_options(self) -> list[str]:
         return [self.START_MONTH_LABEL, self.RETIREMENT_MONTH_LABEL]
@@ -1974,9 +1970,15 @@ class PlannerWindow(QMainWindow):
 
         self._focus_scenario_row(select_row_id)
 
+    def _clear_scenario_sort(self) -> None:
+        self._scenario_sort_column = None
+        self._scenario_sort_ascending = True
+        self._update_scenario_sort_indicator()
+
     def _update_scenario_sort_indicator(self) -> None:
         header = self.scenario_table.horizontalHeader()
         if self._scenario_sort_column is None:
+            header.setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
             return
         header.setSortIndicator(
             self._scenario_sort_column,
@@ -2041,7 +2043,6 @@ class PlannerWindow(QMainWindow):
             return
         self.scenario_table.setCurrentCell(row, column)
         self._mark_dirty()
-        self.refresh_timeline()
 
     def _focus_scenario_combo_cell(self, combo: QComboBox, column: int) -> None:
         row = self.scenario_table.indexAt(combo.pos()).row()
@@ -2182,9 +2183,9 @@ class PlannerWindow(QMainWindow):
             )
         finally:
             self._suspend_change_tracking = False
-        self._sort_scenario_table(select_row_id=row_id)
+        self._clear_scenario_sort()
+        self._focus_scenario_row(row_id)
         self._mark_dirty()
-        self.refresh_timeline()
 
     def add_one_off_event(self) -> None:
         self._suspend_change_tracking = True
@@ -2206,17 +2207,15 @@ class PlannerWindow(QMainWindow):
             )
         finally:
             self._suspend_change_tracking = False
-        self._sort_scenario_table(select_row_id=row_id)
+        self._clear_scenario_sort()
         self._focus_scenario_row(row_id)
         self._mark_dirty()
-        self.refresh_timeline()
 
     def delete_selected_row(self) -> None:
         row = self.scenario_table.currentRow()
         if row >= 0:
             self.scenario_table.removeRow(row)
             self._mark_dirty()
-            self.refresh_timeline()
 
     def _scenario_value(self, row: int, column: int) -> str:
         item = self.scenario_table.item(row, column)
