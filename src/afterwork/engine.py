@@ -18,6 +18,7 @@ class SimulationEngine:
         records: list[MonthlyRecord] = []
         cash_balance = plan.starting_cash_balance
         portfolio_balance = plan.portfolio.starting_balance
+        monthly_discount_rate = plan.portfolio.monthly_growth_rate
         active_recurring_flows = [flow for flow in plan.recurring_flows if flow.enabled]
         active_one_off_events = [event for event in plan.one_off_events if event.enabled]
         replacement_starts = self._replacement_starts(active_recurring_flows)
@@ -55,10 +56,9 @@ class SimulationEngine:
                 if event.target == FlowTarget.CASH:
                     cash_flow_nominal += event.amount
                 else:
-                    cash_flow_nominal -= event.amount
                     portfolio_contribution_nominal += event.amount
 
-                flow_present_value += event.amount
+                flow_present_value += event.amount / ((1 + monthly_discount_rate) ** period_index)
                 applied_names.append(event.display_label)
 
             cash_balance += cash_flow_nominal

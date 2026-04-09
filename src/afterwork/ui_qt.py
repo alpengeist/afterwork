@@ -59,7 +59,7 @@ from afterwork.app_settings import SettingsStore
 from afterwork.domain import add_months, month_index
 
 
-SCENARIO_HEADERS = ["Active", "Type", "Category", "Color", "Amount", "Basis", "Target", "Frequency", "Start", "Start Age", "End", "Yearly Adj. %"]
+SCENARIO_HEADERS = ["Active", "Type", "Category", "Color", "Amount", "Basis", "Target", "Frequency", "Start", "Start Age", "End", "End Age", "Yearly Adj. %"]
 RESULT_HEADERS = [
     "Month",
     "Age",
@@ -1300,7 +1300,8 @@ class PlannerWindow(QMainWindow):
     SCENARIO_START_COLUMN = 8
     SCENARIO_START_AGE_COLUMN = 9
     SCENARIO_END_COLUMN = 10
-    SCENARIO_ADJUSTMENT_COLUMN = 11
+    SCENARIO_END_AGE_COLUMN = 11
+    SCENARIO_ADJUSTMENT_COLUMN = 12
     ACTIVE_SYMBOL = "✓"
     INACTIVE_SYMBOL = "✕"
 
@@ -1496,7 +1497,8 @@ class PlannerWindow(QMainWindow):
         self.scenario_table.setColumnWidth(8, 110)
         self.scenario_table.setColumnWidth(9, 90)
         self.scenario_table.setColumnWidth(10, 110)
-        self.scenario_table.setColumnWidth(11, 110)
+        self.scenario_table.setColumnWidth(11, 90)
+        self.scenario_table.setColumnWidth(12, 110)
         table_toolbar = QHBoxLayout()
         table_toolbar.setContentsMargins(0, 0, 0, 0)
         table_toolbar.setSpacing(10)
@@ -1636,7 +1638,7 @@ class PlannerWindow(QMainWindow):
 
     def _connect_refresh_signals(self) -> None:
         self.scenario_table.itemChanged.connect(self._on_scenario_table_changed)
-        self.scenario_table.cellClicked.connect(self._on_scenario_cell_clicked)
+        self.scenario_table.cellPressed.connect(self._on_scenario_cell_pressed)
         self.scenario_table.horizontalHeader().sectionClicked.connect(self._on_scenario_header_clicked)
         self.start_month_edit.editingFinished.connect(self._on_plan_input_changed)
         self.retirement_month_edit.editingFinished.connect(self._on_plan_input_changed)
@@ -1656,6 +1658,8 @@ class PlannerWindow(QMainWindow):
             self._sync_frequency_cell(_item.row())
         if _item.column() == self.SCENARIO_START_COLUMN:
             self._sync_start_age_cell(_item.row())
+        if _item.column() == self.SCENARIO_END_COLUMN:
+            self._sync_end_age_cell(_item.row())
         if self._scenario_sort_column is not None and _item.column() in {
             self.SCENARIO_CATEGORY_COLUMN,
             self.SCENARIO_START_COLUMN,
@@ -1664,7 +1668,7 @@ class PlannerWindow(QMainWindow):
             self._sort_scenario_table(select_row_id=self._scenario_row_id(_item.row()))
         self._mark_dirty()
 
-    def _on_scenario_cell_clicked(self, row: int, column: int) -> None:
+    def _on_scenario_cell_pressed(self, row: int, column: int) -> None:
         if self._suspend_change_tracking:
             return
         if column == 0:
@@ -1691,7 +1695,7 @@ class PlannerWindow(QMainWindow):
     def _on_plan_input_changed(self, *_args) -> None:
         if self._suspend_change_tracking:
             return
-        self._sync_all_start_age_cells()
+        self._sync_all_age_cells()
         self._mark_dirty()
         self.refresh_timeline()
 
@@ -1736,7 +1740,7 @@ class PlannerWindow(QMainWindow):
             elif column == 1:
                 item = QTableWidgetItem(str(value))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            elif column == self.SCENARIO_START_AGE_COLUMN:
+            elif column in {self.SCENARIO_START_AGE_COLUMN, self.SCENARIO_END_AGE_COLUMN}:
                 item = QTableWidgetItem(str(value))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             elif column == self.SCENARIO_COLOR_COLUMN:
@@ -1750,6 +1754,7 @@ class PlannerWindow(QMainWindow):
         self._sync_target_cell(row)
         self._sync_frequency_cell(row)
         self._sync_start_age_cell(row)
+        self._sync_end_age_cell(row)
         self._apply_scenario_row_style(row)
         return row_id
 
@@ -1833,25 +1838,30 @@ class PlannerWindow(QMainWindow):
             self._scenario_value(row, 1),
             self._scenario_value(row, 2),
             self._scenario_color(row),
-            self._scenario_value(row, 4),
-            self._scenario_value(row, 5),
-            self._scenario_value(row, 6),
-            self._scenario_value(row, 7),
-            self._scenario_value(row, 8),
-            self._scenario_value(row, 9),
-            self._scenario_value(row, 10),
-            self._scenario_value(row, 11),
+            self._scenario_value(row, self.SCENARIO_AMOUNT_COLUMN),
+            self._scenario_value(row, self.SCENARIO_AMOUNT_BASIS_COLUMN),
+            self._scenario_value(row, self.SCENARIO_TARGET_COLUMN),
+            self._scenario_value(row, self.SCENARIO_FREQUENCY_COLUMN),
+            self._scenario_value(row, self.SCENARIO_START_COLUMN),
+            self._scenario_value(row, self.SCENARIO_START_AGE_COLUMN),
+            self._scenario_value(row, self.SCENARIO_END_COLUMN),
+            self._scenario_value(row, self.SCENARIO_END_AGE_COLUMN),
+            self._scenario_value(row, self.SCENARIO_ADJUSTMENT_COLUMN),
         ]
 
     def _scenario_display_values(self, values: list[str | bool]) -> list[str | bool]:
         display_values = list(values)
-        if len(display_values) == len(SCENARIO_HEADERS) - 1:
+        if len(display_values) == len(SCENARIO_HEADERS) - 2:
             start_value = str(display_values[self.SCENARIO_START_COLUMN])
-            display_values.insert(self.SCENARIO_START_AGE_COLUMN, self._start_age_text(start_value))
+            end_value = str(display_values[self.SCENARIO_END_COLUMN - 1])
+            display_values.insert(self.SCENARIO_START_AGE_COLUMN, self._age_text(start_value))
+            display_values.insert(self.SCENARIO_END_AGE_COLUMN, self._age_text(end_value))
             return display_values
         if len(display_values) == len(SCENARIO_HEADERS):
             start_value = str(display_values[self.SCENARIO_START_COLUMN])
-            display_values[self.SCENARIO_START_AGE_COLUMN] = self._start_age_text(start_value)
+            end_value = str(display_values[self.SCENARIO_END_COLUMN])
+            display_values[self.SCENARIO_START_AGE_COLUMN] = self._age_text(start_value)
+            display_values[self.SCENARIO_END_AGE_COLUMN] = self._age_text(end_value)
             return display_values
         raise ValueError(f"Unsupported scenario row width: {len(display_values)}")
 
@@ -1881,13 +1891,15 @@ class PlannerWindow(QMainWindow):
     def _date_reference_options(self) -> list[str]:
         return [self.START_MONTH_LABEL, self.RETIREMENT_MONTH_LABEL]
 
-    def _start_age_text(self, start_value: str) -> str:
+    def _age_text(self, date_value: str) -> str:
+        if not date_value.strip():
+            return ""
         try:
-            start_date = self._resolve_date_reference(start_value)
+            target_date = self._resolve_date_reference(date_value)
             birth_date = date.fromisoformat(self.birthday_edit.text().strip())
         except Exception:
             return ""
-        age_years = Person(birth_date=birth_date, target_age_years=self.target_age_spin.value()).age_years_at(start_date)
+        age_years = Person(birth_date=birth_date, target_age_years=self.target_age_spin.value()).age_years_at(target_date)
         return f"{age_years:.1f}"
 
     def _sync_start_age_cell(self, row: int) -> None:
@@ -1900,13 +1912,28 @@ class PlannerWindow(QMainWindow):
         previous_suspend = self._suspend_change_tracking
         self._suspend_change_tracking = True
         try:
-            item.setText(self._start_age_text(self._scenario_value(row, self.SCENARIO_START_COLUMN)))
+            item.setText(self._age_text(self._scenario_value(row, self.SCENARIO_START_COLUMN)))
         finally:
             self._suspend_change_tracking = previous_suspend
 
-    def _sync_all_start_age_cells(self) -> None:
+    def _sync_end_age_cell(self, row: int) -> None:
+        item = self.scenario_table.item(row, self.SCENARIO_END_AGE_COLUMN)
+        if item is None:
+            item = QTableWidgetItem("")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.scenario_table.setItem(row, self.SCENARIO_END_AGE_COLUMN, item)
+
+        previous_suspend = self._suspend_change_tracking
+        self._suspend_change_tracking = True
+        try:
+            item.setText(self._age_text(self._scenario_value(row, self.SCENARIO_END_COLUMN)))
+        finally:
+            self._suspend_change_tracking = previous_suspend
+
+    def _sync_all_age_cells(self) -> None:
         for row in range(self.scenario_table.rowCount()):
             self._sync_start_age_cell(row)
+            self._sync_end_age_cell(row)
 
     def _resolve_date_reference(self, value: str) -> date:
         text = value.strip()
