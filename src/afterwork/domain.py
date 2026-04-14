@@ -59,6 +59,48 @@ class Portfolio:
 
 
 @dataclass(frozen=True)
+class MarketShock:
+    starts_on: date
+    drawdown_pct: float
+    drawdown_months: int
+    recovery_months: int
+    label: str = "Market shock"
+    enabled: bool = True
+    color: str | None = None
+
+    @property
+    def display_label(self) -> str:
+        return self.label.strip() or "Market shock"
+
+    def factor_at(self, current_month: date) -> float:
+        if current_month < self.starts_on:
+            return 1.0
+
+        drawdown_pct = max(min(self.drawdown_pct, 0.999999), 0.0)
+        trough_factor = 1.0 - drawdown_pct
+        offset = month_index(self.starts_on, current_month)
+
+        if self.drawdown_months > 0 and offset < self.drawdown_months:
+            progress = (offset + 1) / self.drawdown_months
+            return 1.0 - drawdown_pct * progress
+
+        if self.drawdown_months <= 0:
+            drawdown_end_offset = -1
+        else:
+            drawdown_end_offset = self.drawdown_months - 1
+
+        if self.recovery_months > 0 and offset - drawdown_end_offset - 1 < self.recovery_months:
+            recovery_offset = offset - drawdown_end_offset - 1
+            progress = (recovery_offset + 1) / self.recovery_months
+            return trough_factor + drawdown_pct * progress
+
+        if self.drawdown_months <= 0 and self.recovery_months <= 0:
+            return trough_factor
+
+        return 1.0
+
+
+@dataclass(frozen=True)
 class RecurringFlow:
     amount: float
     frequency: Frequency
@@ -131,6 +173,7 @@ class Plan:
     portfolio: Portfolio = field(default_factory=Portfolio)
     recurring_flows: list[RecurringFlow] = field(default_factory=list)
     one_off_events: list[OneOffEvent] = field(default_factory=list)
+    market_shocks: list[MarketShock] = field(default_factory=list)
 
     def simulation_months(self) -> int:
         return self.person.simulation_months(self.start_month)

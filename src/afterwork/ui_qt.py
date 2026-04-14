@@ -13,6 +13,7 @@ from PySide6.QtGui import QAction, QBrush, QCloseEvent, QColor, QFont, QFontMetr
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -46,6 +47,7 @@ from afterwork import (
     AmountBasis,
     FlowTarget,
     Frequency,
+    MarketShock,
     OneOffEvent,
     Person,
     Plan,
@@ -151,6 +153,23 @@ QLabel#WarningLabel {{
     color: {DANGER_COLOR};
     font-weight: 600;
     padding: 10px 2px 0 2px;
+}}
+
+QCheckBox#ShockSwitch {{
+    spacing: 0;
+}}
+
+QCheckBox#ShockSwitch::indicator {{
+    width: 42px;
+    height: 24px;
+    border-radius: 12px;
+    background-color: #cbd5e1;
+    border: 1px solid #b7c4d5;
+}}
+
+QCheckBox#ShockSwitch::indicator:checked {{
+    background-color: #bfdbfe;
+    border: 1px solid #93c5fd;
 }}
 
 QPushButton {{
@@ -1174,6 +1193,19 @@ class EventTimelineItem:
     item_type: str
 
 
+@dataclass
+class ShockEditor:
+    card: QFrame
+    title_label: QLabel
+    active_switch: QCheckBox
+    active_state_label: QLabel
+    label_edit: QLineEdit
+    start_edit: QLineEdit
+    drawdown_spin: QDoubleSpinBox
+    drawdown_months_spin: QSpinBox
+    recovery_months_spin: QSpinBox
+
+
 class EventTimelineWidget(QWidget):
     LEFT_MARGIN = 150
     RIGHT_MARGIN = 24
@@ -1315,6 +1347,7 @@ class PlannerWindow(QMainWindow):
         self._scenario_row_id_counter = 0
         self._scenario_sort_column: int | None = None
         self._scenario_sort_ascending = True
+        self._shock_editors: list[ShockEditor] = []
         self.autosave_path = self.settings_store.get_autosave_path()
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setSingleShot(True)
@@ -1372,6 +1405,7 @@ class PlannerWindow(QMainWindow):
         tabs.setDocumentMode(True)
         tabs.addTab(self._build_assumptions_panel(), "Plan Assumptions")
         tabs.addTab(self._build_scenario_panel(), "Event Table")
+        tabs.addTab(self._build_shocks_panel(), "Shocks")
         tabs.addTab(self._build_event_timeline_panel(), "Event Timeline")
         tabs.addTab(self._build_results_panel(), "Simulation Table")
         tabs.setCurrentIndex(1)
@@ -1515,6 +1549,42 @@ class PlannerWindow(QMainWindow):
 
         return panel
 
+    def _build_shocks_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("WorkspacePage")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(10)
+        for label, handler in [
+            ("Add Shock", self.add_market_shock),
+            ("Run Simulation", self.run_simulation),
+        ]:
+            toolbar.addWidget(self._create_button(label, handler))
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+
+        self.shocks_scroll = QScrollArea()
+        self.shocks_scroll.setWidgetResizable(True)
+        self.shocks_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.shocks_container = QWidget()
+        self.shocks_container.setObjectName("WorkspacePage")
+        self.shocks_layout = QVBoxLayout(self.shocks_container)
+        self.shocks_layout.setContentsMargins(0, 0, 0, 0)
+        self.shocks_layout.setSpacing(12)
+        self.shocks_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.shocks_empty_label = QLabel("No shocks configured. Add a shock to model a portfolio drawdown and recovery.")
+        self.shocks_empty_label.setObjectName("SummaryLabel")
+        self.shocks_layout.addWidget(self.shocks_empty_label)
+        self.shocks_layout.addStretch()
+        self.shocks_scroll.setWidget(self.shocks_container)
+        layout.addWidget(self.shocks_scroll, 1)
+
+        return panel
+
     def _build_event_timeline_panel(self) -> QWidget:
         panel = QWidget()
         panel.setObjectName("WorkspacePage")
@@ -1604,6 +1674,103 @@ class PlannerWindow(QMainWindow):
         layout.addWidget(self.summary_label)
         layout.addWidget(self.results_table, 1)
         return panel
+
+    def _create_shock_editor(self, shock: MarketShock | None = None, *, start_text: str | None = None) -> ShockEditor:
+        card = QFrame()
+        card.setObjectName("SectionCard")
+        card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        card_layout = QHBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(12)
+        card_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        title_label = QLabel("")
+        title_font = title_label.font()
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setMinimumWidth(68)
+        card_layout.addWidget(title_label)
+
+        active_switch = QCheckBox()
+        active_switch.setObjectName("ShockSwitch")
+        active_switch.setChecked(True if shock is None else shock.enabled)
+        active_switch.setCursor(Qt.CursorShape.PointingHandCursor)
+        card_layout.addWidget(active_switch, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        active_state_label = QLabel("")
+        active_state_label.setObjectName("FieldLabel")
+        active_state_label.setMinimumWidth(28)
+        card_layout.addWidget(active_state_label, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        label_edit = QLineEdit("" if shock is None else shock.label)
+        start_edit = QLineEdit(
+            start_text if start_text is not None else (self.START_MONTH_LABEL if shock is None else shock.starts_on.isoformat())
+        )
+        start_edit.setPlaceholderText("YYYY-MM-DD, start, or retirement")
+
+        drawdown_spin = QDoubleSpinBox()
+        drawdown_spin.setRange(0.0, 99.9)
+        drawdown_spin.setDecimals(1)
+        drawdown_spin.setSingleStep(1.0)
+        drawdown_spin.setSuffix(" %")
+        drawdown_spin.setValue(30.0 if shock is None else shock.drawdown_pct * 100.0)
+
+        drawdown_months_spin = QSpinBox()
+        drawdown_months_spin.setRange(1, 240)
+        drawdown_months_spin.setValue(6 if shock is None else max(shock.drawdown_months, 1))
+
+        recovery_months_spin = QSpinBox()
+        recovery_months_spin.setRange(1, 240)
+        recovery_months_spin.setValue(18 if shock is None else max(shock.recovery_months, 1))
+
+        for widget in (drawdown_spin, drawdown_months_spin, recovery_months_spin):
+            widget.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+
+        self._set_compact_width(label_edit, "Crash 2028", 90)
+        self._set_compact_width(start_edit, "2026-01-01", 34)
+        self._set_compact_width(drawdown_spin, "99.9 %", 46)
+        self._set_compact_width(drawdown_months_spin, "240", 32)
+        self._set_compact_width(recovery_months_spin, "240", 32)
+
+        card_layout.addWidget(self._create_field_block("Label", label_edit), alignment=Qt.AlignmentFlag.AlignLeft)
+        card_layout.addWidget(self._create_field_block("Start", start_edit), alignment=Qt.AlignmentFlag.AlignLeft)
+        card_layout.addWidget(self._create_field_block("Drawdown %", drawdown_spin), alignment=Qt.AlignmentFlag.AlignLeft)
+        card_layout.addWidget(self._create_field_block("Drawdown Mo", drawdown_months_spin), alignment=Qt.AlignmentFlag.AlignLeft)
+        card_layout.addWidget(self._create_field_block("Recovery Mo", recovery_months_spin), alignment=Qt.AlignmentFlag.AlignLeft)
+
+        delete_button = QPushButton("Delete")
+        delete_button.setFixedHeight(34)
+        delete_button.setMinimumWidth(84)
+        card_layout.addWidget(delete_button, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        editor = ShockEditor(
+            card=card,
+            title_label=title_label,
+            active_switch=active_switch,
+            active_state_label=active_state_label,
+            label_edit=label_edit,
+            start_edit=start_edit,
+            drawdown_spin=drawdown_spin,
+            drawdown_months_spin=drawdown_months_spin,
+            recovery_months_spin=recovery_months_spin,
+        )
+
+        label_edit.textChanged.connect(lambda _text: self._on_shock_input_changed())
+        label_edit.textChanged.connect(lambda _text: self._refresh_shock_editor_titles())
+        start_edit.textChanged.connect(lambda _text: self._on_shock_input_changed())
+        drawdown_spin.valueChanged.connect(self._on_shock_input_changed)
+        drawdown_months_spin.valueChanged.connect(self._on_shock_input_changed)
+        recovery_months_spin.valueChanged.connect(self._on_shock_input_changed)
+        active_switch.clicked.connect(lambda checked, editor=editor: self._on_shock_active_clicked(editor, checked))
+        delete_button.clicked.connect(lambda _checked=False, editor=editor: self._delete_shock_editor(editor))
+
+        insert_index = max(self.shocks_layout.count() - 1, 0)
+        self.shocks_layout.insertWidget(insert_index, card, 0, Qt.AlignmentFlag.AlignLeft)
+        self._shock_editors.append(editor)
+        self._sync_shock_active_button(editor)
+        self._refresh_shock_editor_titles()
+        self._update_shocks_empty_state()
+        return editor
 
     def _create_button(self, label: str, handler) -> QPushButton:
         button = QPushButton(label)
@@ -1974,6 +2141,17 @@ class PlannerWindow(QMainWindow):
                     }
                     for row in range(self.scenario_table.rowCount())
                 ],
+                "shock_rows": [
+                    {
+                        "enabled": editor.active_switch.isChecked(),
+                        "label": editor.label_edit.text().strip(),
+                        "start": editor.start_edit.text().strip(),
+                        "drawdown_pct": editor.drawdown_spin.value(),
+                        "drawdown_months": editor.drawdown_months_spin.value(),
+                        "recovery_months": editor.recovery_months_spin.value(),
+                    }
+                    for editor in self._shock_editors
+                ],
             },
         }
 
@@ -2266,6 +2444,62 @@ class PlannerWindow(QMainWindow):
             existing.deleteLater()
             self.scenario_table.removeCellWidget(row, self.SCENARIO_FREQUENCY_COLUMN)
 
+    def _on_shock_input_changed(self, *_args) -> None:
+        if self._suspend_change_tracking:
+            return
+        self._mark_dirty()
+
+    def _sync_shock_active_button(self, editor: ShockEditor) -> None:
+        enabled = editor.active_switch.isChecked()
+        editor.active_state_label.setText("On" if enabled else "Off")
+        editor.active_state_label.setStyleSheet(
+            f"color: {SUCCESS_COLOR if enabled else MUTED_TEXT_COLOR}; font-weight: 600;"
+        )
+        editor.title_label.setStyleSheet(
+            f"color: {TEXT_COLOR if enabled else MUTED_TEXT_COLOR};"
+        )
+
+    def _refresh_shock_editor_titles(self) -> None:
+        for index, editor in enumerate(self._shock_editors, start=1):
+            editor.title_label.setText(f"Shock {index}")
+            self._sync_shock_active_button(editor)
+
+    def _update_shocks_empty_state(self) -> None:
+        self.shocks_empty_label.setVisible(not self._shock_editors)
+
+    def _on_shock_active_clicked(self, editor: ShockEditor, checked: bool) -> None:
+        self._sync_shock_active_button(editor)
+        if self._suspend_change_tracking:
+            return
+        self._mark_dirty()
+        self.refresh_timeline()
+        self.run_simulation()
+
+    def _delete_shock_editor(self, editor: ShockEditor, *, update_dirty: bool = True) -> None:
+        if editor not in self._shock_editors:
+            return
+        self._shock_editors.remove(editor)
+        editor.card.setParent(None)
+        editor.card.deleteLater()
+        self._refresh_shock_editor_titles()
+        self._update_shocks_empty_state()
+        if update_dirty and not self._suspend_change_tracking:
+            self._mark_dirty()
+
+    def _clear_shock_editors(self) -> None:
+        for editor in list(self._shock_editors):
+            self._delete_shock_editor(editor, update_dirty=False)
+
+    def add_market_shock(self) -> None:
+        self._suspend_change_tracking = True
+        try:
+            editor = self._create_shock_editor()
+        finally:
+            self._suspend_change_tracking = False
+        self._refresh_shock_editor_titles()
+        self._mark_dirty()
+        editor.label_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+
     def add_recurring_flow(self) -> None:
         self._suspend_change_tracking = True
         try:
@@ -2335,9 +2569,20 @@ class PlannerWindow(QMainWindow):
         item = self.scenario_table.item(row, 0)
         return item is not None and bool(item.data(SCENARIO_ACTIVE_ROLE))
 
+    def _market_shock_from_editor(self, editor: ShockEditor) -> MarketShock:
+        return MarketShock(
+            starts_on=self._resolve_date_reference(editor.start_edit.text().strip()),
+            drawdown_pct=editor.drawdown_spin.value() / 100.0,
+            drawdown_months=editor.drawdown_months_spin.value(),
+            recovery_months=editor.recovery_months_spin.value(),
+            label=editor.label_edit.text().strip() or "Market shock",
+            enabled=editor.active_switch.isChecked(),
+        )
+
     def _build_plan(self) -> Plan:
         recurring_flows: list[RecurringFlow] = []
         one_off_events: list[OneOffEvent] = []
+        market_shocks = [self._market_shock_from_editor(editor) for editor in self._shock_editors]
 
         for row in range(self.scenario_table.rowCount()):
             enabled = self._scenario_enabled(row)
@@ -2395,6 +2640,7 @@ class PlannerWindow(QMainWindow):
             ),
             recurring_flows=recurring_flows,
             one_off_events=one_off_events,
+            market_shocks=market_shocks,
         )
 
     def run_simulation(self) -> None:
@@ -2482,6 +2728,7 @@ class PlannerWindow(QMainWindow):
         ui_state = data.get("_ui", {}) if isinstance(data, dict) else {}
         parameters = ui_state.get("parameters", {}) if isinstance(ui_state, dict) else {}
         scenario_rows = ui_state.get("scenario_rows", []) if isinstance(ui_state, dict) else []
+        shock_rows = ui_state.get("shock_rows", []) if isinstance(ui_state, dict) else []
 
         self._suspend_change_tracking = True
         try:
@@ -2497,6 +2744,7 @@ class PlannerWindow(QMainWindow):
             self.portfolio_growth_spin.setValue(plan.portfolio.annual_growth_rate * 100.0)
 
             self.scenario_table.setRowCount(0)
+            self._clear_shock_editors()
             if isinstance(scenario_rows, list) and scenario_rows:
                 flow_index = 0
                 event_index = 0
@@ -2577,6 +2825,24 @@ class PlannerWindow(QMainWindow):
                             "",
                         ]
                     )
+            if isinstance(shock_rows, list) and shock_rows:
+                for row in shock_rows:
+                    if not isinstance(row, dict):
+                        continue
+                    self._create_shock_editor(
+                        MarketShock(
+                            starts_on=plan.start_month,
+                            drawdown_pct=float(row.get("drawdown_pct", 30.0)) / 100.0,
+                            drawdown_months=int(row.get("drawdown_months", 6)),
+                            recovery_months=int(row.get("recovery_months", 18)),
+                            label=str(row.get("label", "Market shock")),
+                            enabled=bool(row.get("enabled", True)),
+                        ),
+                        start_text=str(row.get("start", self.START_MONTH_LABEL)),
+                    )
+            else:
+                for shock in plan.market_shocks:
+                    self._create_shock_editor(shock, start_text=shock.starts_on.isoformat())
         finally:
             self._suspend_change_tracking = False
 
@@ -2659,10 +2925,18 @@ class PlannerWindow(QMainWindow):
             ("Total", QColor(TEXT_COLOR), "total_balance"),
         ]
         for label, color, attribute in balance_specs:
-            points = [
+            if attribute == "cash_balance":
+                initial_value = plan.starting_cash_balance
+            elif attribute == "portfolio_balance":
+                initial_value = plan.portfolio.starting_balance
+            else:
+                initial_value = plan.starting_cash_balance + plan.portfolio.starting_balance
+
+            points = [ChartPoint(plan.start_month, initial_value)]
+            points.extend(
                 ChartPoint(record.month, getattr(record, attribute))
                 for record in result.records
-            ]
+            )
             if points:
                 balance_series.append(ChartSeries(name=label, color=color, points=points, series_type="balance"))
 

@@ -4,6 +4,7 @@ from datetime import date
 
 from afterwork.domain import (
     FlowTarget,
+    MarketShock,
     MonthlyRecord,
     Plan,
     RecurringFlow,
@@ -19,8 +20,10 @@ class SimulationEngine:
         cash_balance = plan.starting_cash_balance
         portfolio_balance = plan.portfolio.starting_balance
         monthly_discount_rate = plan.portfolio.monthly_growth_rate
+        base_growth_multiplier = 1 + plan.portfolio.monthly_growth_rate
         active_recurring_flows = [flow for flow in plan.recurring_flows if flow.enabled]
         active_one_off_events = [event for event in plan.one_off_events if event.enabled]
+        active_market_shocks = [shock for shock in plan.market_shocks if shock.enabled]
         replacement_starts = self._replacement_starts(active_recurring_flows)
 
         for offset in range(plan.simulation_months()):
@@ -63,9 +66,19 @@ class SimulationEngine:
 
             cash_balance += cash_flow_nominal
             portfolio_balance += portfolio_contribution_nominal
-            portfolio_growth_nominal = portfolio_balance * plan.portfolio.monthly_growth_rate
+            shock_multiplier = self._shock_multiplier(
+                active_market_shocks,
+                current_month=current_month,
+                previous_month=add_months(current_month, -1),
+            )
+            portfolio_growth_nominal = portfolio_balance * (base_growth_multiplier * shock_multiplier - 1.0)
             portfolio_balance += portfolio_growth_nominal
             portfolio_transfer_nominal = 0.0
+            applied_names.extend(
+                shock.display_label
+                for shock in active_market_shocks
+                if self._shock_applies_in_month(shock, current_month)
+            )
 
             if cash_balance < plan.minimal_cash_level and plan.portfolio_withdrawal > 0:
                 while cash_balance < plan.minimal_cash_level:
@@ -99,6 +112,21 @@ class SimulationEngine:
             )
 
         return SimulationResult(records=records)
+
+    def _shock_multiplier(self, shocks: list[MarketShock], *, current_month: date, previous_month: date) -> float:
+        current_factor = 1.0
+        previous_factor = 1.0
+        for shock in shocks:
+            current_factor *= shock.factor_at(current_month)
+            previous_factor *= shock.factor_at(previous_month)
+        if previous_factor == 0:
+            return 1.0
+        return current_factor / previous_factor
+
+    def _shock_applies_in_month(self, shock: MarketShock, current_month: date) -> bool:
+        if current_month < shock.starts_on:
+            return False
+        return abs(shock.factor_at(current_month) - shock.factor_at(add_months(current_month, -1))) > 1e-9
 
     def _replacement_starts(self, flows: list[RecurringFlow]) -> dict[int, date]:
         grouped: dict[tuple[str, str], list[RecurringFlow]] = {}

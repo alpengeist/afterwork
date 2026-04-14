@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from afterwork.domain import AmountBasis, FlowTarget, Frequency, OneOffEvent, Person, Plan, Portfolio, RecurringFlow
+from afterwork.domain import AmountBasis, FlowTarget, Frequency, MarketShock, OneOffEvent, Person, Plan, Portfolio, RecurringFlow
 
 
 def _date_to_str(value: date) -> str:
@@ -56,6 +56,18 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
             }
             for event in plan.one_off_events
         ],
+        "market_shocks": [
+            {
+                "starts_on": _date_to_str(shock.starts_on),
+                "drawdown_pct": shock.drawdown_pct,
+                "drawdown_months": shock.drawdown_months,
+                "recovery_months": shock.recovery_months,
+                "label": shock.label,
+                "enabled": shock.enabled,
+                "color": shock.color,
+            }
+            for shock in plan.market_shocks
+        ],
     }
 
 
@@ -86,6 +98,18 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
         )
         for item in data.get("one_off_events", [])
     ]
+    market_shocks = [
+        MarketShock(
+            starts_on=_date_from_str(item["starts_on"]),
+            drawdown_pct=float(item.get("drawdown_pct", 0.0)),
+            drawdown_months=int(item.get("drawdown_months", 0)),
+            recovery_months=int(item.get("recovery_months", 0)),
+            label=str(item.get("label", "Market shock")),
+            enabled=bool(item.get("enabled", True)),
+            color=item.get("color"),
+        )
+        for item in data.get("market_shocks", [])
+    ]
     person_data = data["person"]
     portfolio_data = data.get("portfolio", {})
     return Plan(
@@ -103,6 +127,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
         ),
         recurring_flows=recurring_flows,
         one_off_events=one_off_events,
+        market_shocks=market_shocks,
     )
 
 
