@@ -1662,6 +1662,7 @@ class PlannerWindow(QMainWindow):
             self._sync_end_age_cell(_item.row())
         if self._scenario_sort_column is not None and _item.column() in {
             self.SCENARIO_CATEGORY_COLUMN,
+            self.SCENARIO_AMOUNT_COLUMN,
             self.SCENARIO_START_COLUMN,
             self.SCENARIO_END_COLUMN,
         }:
@@ -1674,13 +1675,20 @@ class PlannerWindow(QMainWindow):
         if column == 0:
             self._set_scenario_row_enabled(row, not self._scenario_enabled(row))
             self._mark_dirty()
+            self.refresh_timeline()
+            self.run_simulation()
             return
         if column == self.SCENARIO_COLOR_COLUMN:
             self._edit_scenario_row_color(row)
             return
 
     def _on_scenario_header_clicked(self, column: int) -> None:
-        if column not in {self.SCENARIO_CATEGORY_COLUMN, self.SCENARIO_START_COLUMN, self.SCENARIO_END_COLUMN}:
+        if column not in {
+            self.SCENARIO_CATEGORY_COLUMN,
+            self.SCENARIO_AMOUNT_COLUMN,
+            self.SCENARIO_START_COLUMN,
+            self.SCENARIO_END_COLUMN,
+        }:
             return
 
         if self._scenario_sort_column == column:
@@ -1984,6 +1992,15 @@ class PlannerWindow(QMainWindow):
             return (1, "")
         return (0, normalized if ascending else "".join(chr(0x10FFFF - ord(char)) for char in normalized))
 
+    def _scenario_amount_sort_key(self, value: str, *, ascending: bool) -> tuple[int, float]:
+        if not value:
+            return (1, 0.0)
+        try:
+            amount = float(value)
+        except ValueError:
+            return (1, 0.0)
+        return (0, amount if ascending else -amount)
+
     def _sort_scenario_by_category(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
         return sorted(
             rows,
@@ -2002,6 +2019,15 @@ class PlannerWindow(QMainWindow):
             ),
         )
 
+    def _sort_scenario_by_amount(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                self._scenario_amount_sort_key(str(row[1][self.SCENARIO_AMOUNT_COLUMN]), ascending=ascending),
+                row[0],
+            ),
+        )
+
     def _sort_scenario_by_end_date(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
         return sorted(
             rows,
@@ -2014,6 +2040,7 @@ class PlannerWindow(QMainWindow):
     def _sort_scenario_table(self, *, select_row_id: int | None = None) -> None:
         if self._scenario_sort_column not in {
             self.SCENARIO_CATEGORY_COLUMN,
+            self.SCENARIO_AMOUNT_COLUMN,
             self.SCENARIO_START_COLUMN,
             self.SCENARIO_END_COLUMN,
         }:
@@ -2028,6 +2055,8 @@ class PlannerWindow(QMainWindow):
 
         if self._scenario_sort_column == self.SCENARIO_CATEGORY_COLUMN:
             ordered_rows = self._sort_scenario_by_category(rows, ascending=self._scenario_sort_ascending)
+        elif self._scenario_sort_column == self.SCENARIO_AMOUNT_COLUMN:
+            ordered_rows = self._sort_scenario_by_amount(rows, ascending=self._scenario_sort_ascending)
         elif self._scenario_sort_column == self.SCENARIO_START_COLUMN:
             ordered_rows = self._sort_scenario_by_start_date(rows, ascending=self._scenario_sort_ascending)
         else:
@@ -2709,8 +2738,15 @@ class PlannerWindow(QMainWindow):
             self.zero_balance_warning_label.hide()
             self.zero_balance_warning_label.setText("")
             return
+        age_text = ""
+        try:
+            birth_date = date.fromisoformat(self.birthday_edit.text().strip())
+            age_years = Person(birth_date=birth_date, target_age_years=self.target_age_spin.value()).age_years_at(zero_date)
+            age_text = f" at age {age_years:.1f}"
+        except Exception:
+            pass
         self.zero_balance_warning_label.setText(
-            f"Warning: total value reaches zero on {zero_date.isoformat()}."
+            f"Warning: total value reaches zero on {zero_date.isoformat()}{age_text}."
         )
         self.zero_balance_warning_label.show()
 
