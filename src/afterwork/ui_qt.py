@@ -9,11 +9,10 @@ from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QBrush, QCloseEvent, QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
+from PySide6.QtGui import QAction, QBrush, QCloseEvent, QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -80,6 +79,9 @@ TARGET_OPTIONS = [target.value for target in FlowTarget]
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 STEP_PLUS_ICON = (ASSET_DIR / "step-plus.svg").as_posix()
 STEP_MINUS_ICON = (ASSET_DIR / "step-minus.svg").as_posix()
+SHOCK_ON_ICON = (ASSET_DIR / "shock-on.svg").as_posix()
+SHOCK_OFF_ICON = (ASSET_DIR / "shock-off.svg").as_posix()
+DELETE_SHOCK_ICON = (ASSET_DIR / "trash-delete.svg").as_posix()
 
 APP_BACKGROUND = "#eef3f9"
 SURFACE_COLOR = "#fbfdff"
@@ -153,23 +155,6 @@ QLabel#WarningLabel {{
     color: {DANGER_COLOR};
     font-weight: 600;
     padding: 10px 2px 0 2px;
-}}
-
-QCheckBox#ShockSwitch {{
-    spacing: 0;
-}}
-
-QCheckBox#ShockSwitch::indicator {{
-    width: 42px;
-    height: 24px;
-    border-radius: 12px;
-    background-color: #cbd5e1;
-    border: 1px solid #b7c4d5;
-}}
-
-QCheckBox#ShockSwitch::indicator:checked {{
-    background-color: #bfdbfe;
-    border: 1px solid #93c5fd;
 }}
 
 QPushButton {{
@@ -1197,8 +1182,7 @@ class EventTimelineItem:
 class ShockEditor:
     card: QFrame
     title_label: QLabel
-    active_switch: QCheckBox
-    active_state_label: QLabel
+    active_toggle: QToolButton
     label_edit: QLineEdit
     start_edit: QLineEdit
     drawdown_spin: QDoubleSpinBox
@@ -1684,6 +1668,27 @@ class PlannerWindow(QMainWindow):
         card_layout.setSpacing(12)
         card_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
+        delete_button = QToolButton()
+        delete_button.setIcon(QIcon(DELETE_SHOCK_ICON))
+        delete_button.setToolTip("Delete shock")
+        delete_button.setAutoRaise(True)
+        delete_button.setFixedSize(44, 44)
+        delete_button.setIconSize(QSize(36, 36))
+        delete_button.setStyleSheet(
+            """
+            QToolButton {
+                border: none;
+                background: transparent;
+                padding: 0;
+                margin: 0;
+            }
+            QToolButton:hover {
+                background: transparent;
+            }
+            """
+        )
+        card_layout.addWidget(delete_button, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
         title_label = QLabel("")
         title_font = title_label.font()
         title_font.setBold(True)
@@ -1691,16 +1696,30 @@ class PlannerWindow(QMainWindow):
         title_label.setMinimumWidth(68)
         card_layout.addWidget(title_label)
 
-        active_switch = QCheckBox()
-        active_switch.setObjectName("ShockSwitch")
-        active_switch.setChecked(True if shock is None else shock.enabled)
-        active_switch.setCursor(Qt.CursorShape.PointingHandCursor)
-        card_layout.addWidget(active_switch, alignment=Qt.AlignmentFlag.AlignVCenter)
-
-        active_state_label = QLabel("")
-        active_state_label.setObjectName("FieldLabel")
-        active_state_label.setMinimumWidth(28)
-        card_layout.addWidget(active_state_label, alignment=Qt.AlignmentFlag.AlignVCenter)
+        active_toggle = QToolButton()
+        active_toggle.setCheckable(True)
+        active_toggle.setChecked(True if shock is None else shock.enabled)
+        active_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        active_toggle.setAutoRaise(True)
+        active_toggle.setFixedSize(44, 44)
+        active_toggle.setIconSize(QSize(36, 36))
+        active_toggle.setStyleSheet(
+            """
+            QToolButton {
+                border: none;
+                background: transparent;
+                padding: 0;
+                margin: 0;
+            }
+            QToolButton:pressed,
+            QToolButton:checked,
+            QToolButton:hover {
+                border: none;
+                background: transparent;
+            }
+            """
+        )
+        card_layout.addWidget(active_toggle, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         label_edit = QLineEdit("" if shock is None else shock.label)
         start_edit = QLineEdit(
@@ -1738,16 +1757,10 @@ class PlannerWindow(QMainWindow):
         card_layout.addWidget(self._create_field_block("Drawdown Mo", drawdown_months_spin), alignment=Qt.AlignmentFlag.AlignLeft)
         card_layout.addWidget(self._create_field_block("Recovery Mo", recovery_months_spin), alignment=Qt.AlignmentFlag.AlignLeft)
 
-        delete_button = QPushButton("Delete")
-        delete_button.setFixedHeight(34)
-        delete_button.setMinimumWidth(84)
-        card_layout.addWidget(delete_button, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
         editor = ShockEditor(
             card=card,
             title_label=title_label,
-            active_switch=active_switch,
-            active_state_label=active_state_label,
+            active_toggle=active_toggle,
             label_edit=label_edit,
             start_edit=start_edit,
             drawdown_spin=drawdown_spin,
@@ -1761,7 +1774,7 @@ class PlannerWindow(QMainWindow):
         drawdown_spin.valueChanged.connect(self._on_shock_input_changed)
         drawdown_months_spin.valueChanged.connect(self._on_shock_input_changed)
         recovery_months_spin.valueChanged.connect(self._on_shock_input_changed)
-        active_switch.clicked.connect(lambda checked, editor=editor: self._on_shock_active_clicked(editor, checked))
+        active_toggle.clicked.connect(lambda checked, editor=editor: self._on_shock_active_clicked(editor, checked))
         delete_button.clicked.connect(lambda _checked=False, editor=editor: self._delete_shock_editor(editor))
 
         insert_index = max(self.shocks_layout.count() - 1, 0)
@@ -2143,7 +2156,7 @@ class PlannerWindow(QMainWindow):
                 ],
                 "shock_rows": [
                     {
-                        "enabled": editor.active_switch.isChecked(),
+                        "enabled": editor.active_toggle.isChecked(),
                         "label": editor.label_edit.text().strip(),
                         "start": editor.start_edit.text().strip(),
                         "drawdown_pct": editor.drawdown_spin.value(),
@@ -2450,11 +2463,9 @@ class PlannerWindow(QMainWindow):
         self._mark_dirty()
 
     def _sync_shock_active_button(self, editor: ShockEditor) -> None:
-        enabled = editor.active_switch.isChecked()
-        editor.active_state_label.setText("On" if enabled else "Off")
-        editor.active_state_label.setStyleSheet(
-            f"color: {SUCCESS_COLOR if enabled else MUTED_TEXT_COLOR}; font-weight: 600;"
-        )
+        enabled = editor.active_toggle.isChecked()
+        editor.active_toggle.setIcon(QIcon(SHOCK_ON_ICON if enabled else SHOCK_OFF_ICON))
+        editor.active_toggle.setToolTip("Shock enabled" if enabled else "Shock disabled")
         editor.title_label.setStyleSheet(
             f"color: {TEXT_COLOR if enabled else MUTED_TEXT_COLOR};"
         )
@@ -2576,7 +2587,7 @@ class PlannerWindow(QMainWindow):
             drawdown_months=editor.drawdown_months_spin.value(),
             recovery_months=editor.recovery_months_spin.value(),
             label=editor.label_edit.text().strip() or "Market shock",
-            enabled=editor.active_switch.isChecked(),
+            enabled=editor.active_toggle.isChecked(),
         )
 
     def _build_plan(self) -> Plan:
