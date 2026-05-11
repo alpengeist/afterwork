@@ -33,6 +33,7 @@ class SimulationEngine:
             applied_names: list[str] = []
             cash_flow_nominal = 0.0
             portfolio_contribution_nominal = 0.0
+            cash_to_portfolio_nominal = 0.0
             flow_present_value = 0.0
 
             for flow in active_recurring_flows:
@@ -46,8 +47,10 @@ class SimulationEngine:
                 if flow.target == FlowTarget.CASH:
                     cash_flow_nominal += adjusted_amount
                 else:
-                    cash_flow_nominal -= adjusted_amount
                     portfolio_contribution_nominal += adjusted_amount
+                    if adjusted_amount > 0:
+                        cash_flow_nominal -= adjusted_amount
+                        cash_to_portfolio_nominal += adjusted_amount
 
                 flow_present_value += flow.present_value(adjusted_amount, period_index)
                 applied_names.append(flow.display_label)
@@ -80,13 +83,16 @@ class SimulationEngine:
                 if self._shock_applies_in_month(shock, current_month)
             )
 
-            if cash_balance < plan.minimal_cash_level and plan.portfolio_withdrawal > 0:
-                while cash_balance < plan.minimal_cash_level:
+            effective_cash_balance = cash_balance + cash_to_portfolio_nominal
+
+            if effective_cash_balance < plan.minimal_cash_level and plan.portfolio_withdrawal > 0:
+                while effective_cash_balance < plan.minimal_cash_level:
                     portfolio_transfer_nominal += plan.portfolio_withdrawal
                     cash_balance += plan.portfolio_withdrawal
                     portfolio_balance -= plan.portfolio_withdrawal
-            elif cash_balance <= 0:
-                portfolio_transfer_nominal = -cash_balance
+                    effective_cash_balance += plan.portfolio_withdrawal
+            elif effective_cash_balance <= 0:
+                portfolio_transfer_nominal = -effective_cash_balance
                 cash_balance += portfolio_transfer_nominal
                 portfolio_balance -= portfolio_transfer_nominal
 

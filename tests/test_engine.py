@@ -4,11 +4,101 @@ from dataclasses import replace
 import unittest
 from datetime import date
 
-from afterwork.domain import FlowTarget, MarketShock, OneOffEvent, Person, Plan, Portfolio
+from afterwork.domain import FlowTarget, Frequency, MarketShock, OneOffEvent, Person, Plan, Portfolio, RecurringFlow
 from afterwork.engine import SimulationEngine
 
 
 class SimulationEngineTests(unittest.TestCase):
+    def test_positive_portfolio_target_recurring_flow_moves_cash_into_portfolio(self) -> None:
+        plan_base = Plan(
+            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
+            start_month=date(2026, 1, 1),
+            starting_cash_balance=1_000.0,
+            portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
+        )
+
+        cash_result = SimulationEngine().run(
+            replace(
+                plan_base,
+                recurring_flows=[
+                    RecurringFlow(
+                        amount=400.0,
+                        frequency=Frequency.MONTHLY,
+                        starts_on=date(2026, 1, 1),
+                        target=FlowTarget.CASH,
+                    )
+                ],
+            )
+        )
+        portfolio_result = SimulationEngine().run(
+            replace(
+                plan_base,
+                recurring_flows=[
+                    RecurringFlow(
+                        amount=400.0,
+                        frequency=Frequency.MONTHLY,
+                        starts_on=date(2026, 1, 1),
+                        target=FlowTarget.PORTFOLIO,
+                    )
+                ],
+            )
+        )
+
+        cash_record = cash_result.records[0]
+        portfolio_record = portfolio_result.records[0]
+
+        self.assertEqual(cash_record.cash_balance, 1_400.0)
+        self.assertEqual(portfolio_record.cash_balance, 600.0)
+        self.assertEqual(cash_record.portfolio_balance, 5_000.0)
+        self.assertEqual(portfolio_record.portfolio_balance, 5_400.0)
+        self.assertEqual(cash_record.total_balance, 6_400.0)
+        self.assertEqual(portfolio_record.total_balance, 6_000.0)
+
+    def test_positive_portfolio_target_recurring_flow_can_undercut_minimum_cash(self) -> None:
+        plan = Plan(
+            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
+            start_month=date(2026, 1, 1),
+            starting_cash_balance=1_000.0,
+            minimal_cash_level=1_000.0,
+            portfolio_withdrawal=300.0,
+            portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
+            recurring_flows=[
+                RecurringFlow(
+                    amount=400.0,
+                    frequency=Frequency.MONTHLY,
+                    starts_on=date(2026, 1, 1),
+                    target=FlowTarget.PORTFOLIO,
+                )
+            ],
+        )
+
+        record = SimulationEngine().run(plan).records[0]
+
+        self.assertEqual(record.cash_balance, 600.0)
+        self.assertEqual(record.portfolio_balance, 5_400.0)
+        self.assertEqual(record.portfolio_transfer_nominal, 0.0)
+
+    def test_negative_portfolio_target_recurring_flow_reduces_portfolio_without_changing_cash(self) -> None:
+        plan = Plan(
+            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
+            start_month=date(2026, 1, 1),
+            starting_cash_balance=1_000.0,
+            portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
+            recurring_flows=[
+                RecurringFlow(
+                    amount=-400.0,
+                    frequency=Frequency.MONTHLY,
+                    starts_on=date(2026, 1, 1),
+                    target=FlowTarget.PORTFOLIO,
+                )
+            ],
+        )
+
+        record = SimulationEngine().run(plan).records[0]
+
+        self.assertEqual(record.cash_balance, 1_000.0)
+        self.assertEqual(record.portfolio_balance, 4_600.0)
+
     def test_portfolio_target_one_off_event_changes_total_like_cash_target(self) -> None:
         plan_base = Plan(
             person=Person(birth_date=date(1980, 1, 1), target_age_years=47),

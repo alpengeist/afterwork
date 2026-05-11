@@ -8,6 +8,8 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QApplication
 
 from afterwork.app_settings import SettingsStore
@@ -49,6 +51,96 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
             for row in range(self.window.scenario_table.rowCount())
         ]
         self.assertEqual(descending, ["100", "20", "-5.5"])
+
+    def test_frequency_header_sorts_rows_by_option_order_with_blank_last(self) -> None:
+        self.window.add_recurring_flow()
+        monthly_row = self.window.scenario_table.rowCount() - 1
+        monthly_combo = self.window.scenario_table.cellWidget(monthly_row, self.window.SCENARIO_FREQUENCY_COLUMN)
+        monthly_combo.setCurrentText("monthly")
+
+        self.window.add_recurring_flow()
+        yearly_row = self.window.scenario_table.rowCount() - 1
+        yearly_combo = self.window.scenario_table.cellWidget(yearly_row, self.window.SCENARIO_FREQUENCY_COLUMN)
+        yearly_combo.setCurrentText("yearly")
+
+        self.window.add_one_off_event()
+
+        self.window._on_scenario_header_clicked(self.window.SCENARIO_FREQUENCY_COLUMN)
+        ascending = [
+            self.window._scenario_value(row, self.window.SCENARIO_FREQUENCY_COLUMN)
+            for row in range(self.window.scenario_table.rowCount())
+        ]
+        self.assertEqual(ascending, ["monthly", "yearly", ""])
+
+        self.window._on_scenario_header_clicked(self.window.SCENARIO_FREQUENCY_COLUMN)
+        descending = [
+            self.window._scenario_value(row, self.window.SCENARIO_FREQUENCY_COLUMN)
+            for row in range(self.window.scenario_table.rowCount())
+        ]
+        self.assertEqual(descending, ["yearly", "monthly", ""])
+
+    def test_basis_and_target_headers_sort_by_option_order(self) -> None:
+        self.window.add_recurring_flow()
+        real_row = self.window.scenario_table.rowCount() - 1
+        real_basis_combo = self.window.scenario_table.cellWidget(real_row, self.window.SCENARIO_AMOUNT_BASIS_COLUMN)
+        real_basis_combo.setCurrentText("Real")
+
+        self.window.add_recurring_flow()
+        nominal_row = self.window.scenario_table.rowCount() - 1
+        nominal_basis_combo = self.window.scenario_table.cellWidget(nominal_row, self.window.SCENARIO_AMOUNT_BASIS_COLUMN)
+        nominal_basis_combo.setCurrentText("Nominal")
+        portfolio_target_combo = self.window.scenario_table.cellWidget(nominal_row, self.window.SCENARIO_TARGET_COLUMN)
+        portfolio_target_combo.setCurrentText("portfolio")
+
+        self.window.add_one_off_event()
+
+        self.window._on_scenario_header_clicked(self.window.SCENARIO_AMOUNT_BASIS_COLUMN)
+        basis_ascending = [
+            self.window._scenario_value(row, self.window.SCENARIO_AMOUNT_BASIS_COLUMN)
+            for row in range(self.window.scenario_table.rowCount())
+        ]
+        self.assertEqual(basis_ascending, ["Real", "Nominal", ""])
+
+        self.window._on_scenario_header_clicked(self.window.SCENARIO_AMOUNT_BASIS_COLUMN)
+        basis_descending = [
+            self.window._scenario_value(row, self.window.SCENARIO_AMOUNT_BASIS_COLUMN)
+            for row in range(self.window.scenario_table.rowCount())
+        ]
+        self.assertEqual(basis_descending, ["Nominal", "Real", ""])
+
+        self.window._on_scenario_header_clicked(self.window.SCENARIO_TARGET_COLUMN)
+        target_ascending = [
+            self.window._scenario_value(row, self.window.SCENARIO_TARGET_COLUMN)
+            for row in range(self.window.scenario_table.rowCount())
+        ]
+        self.assertEqual(target_ascending, ["cash", "cash", "portfolio"])
+
+        self.window._on_scenario_header_clicked(self.window.SCENARIO_TARGET_COLUMN)
+        target_descending = [
+            self.window._scenario_value(row, self.window.SCENARIO_TARGET_COLUMN)
+            for row in range(self.window.scenario_table.rowCount())
+        ]
+        self.assertEqual(target_descending, ["portfolio", "cash", "cash"])
+
+    def test_scenario_combo_ignores_mouse_wheel_when_closed(self) -> None:
+        self.window.add_recurring_flow()
+        row = self.window.scenario_table.rowCount() - 1
+        combo = self.window.scenario_table.cellWidget(row, self.window.SCENARIO_FREQUENCY_COLUMN)
+        combo.setCurrentText("yearly")
+
+        event = QWheelEvent(
+            QPointF(5.0, 5.0),
+            QPointF(5.0, 5.0),
+            QPoint(0, 0),
+            QPoint(0, 120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.ScrollUpdate,
+            False,
+        )
+        QApplication.sendEvent(combo, event)
+
+        self.assertEqual(combo.currentText(), "yearly")
 
     def test_active_toggle_recalculates_results_immediately(self) -> None:
         self.window.add_one_off_event()

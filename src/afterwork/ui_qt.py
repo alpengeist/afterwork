@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QBrush, QCloseEvent, QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QBrush, QCloseEvent, QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
@@ -600,6 +600,14 @@ class ScenarioTableDelegate(TableTextDelegate):
             return
 
         super().setModelData(editor, model, index)
+
+
+class ScenarioComboBox(QComboBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if not self.view().isVisible():
+            event.ignore()
+            return
+        super().wheelEvent(event)
 
 
 class ColorPickerDialog(QDialog):
@@ -1843,6 +1851,9 @@ class PlannerWindow(QMainWindow):
         if self._scenario_sort_column is not None and _item.column() in {
             self.SCENARIO_CATEGORY_COLUMN,
             self.SCENARIO_AMOUNT_COLUMN,
+            self.SCENARIO_AMOUNT_BASIS_COLUMN,
+            self.SCENARIO_TARGET_COLUMN,
+            self.SCENARIO_FREQUENCY_COLUMN,
             self.SCENARIO_START_COLUMN,
             self.SCENARIO_END_COLUMN,
         }:
@@ -1866,6 +1877,9 @@ class PlannerWindow(QMainWindow):
         if column not in {
             self.SCENARIO_CATEGORY_COLUMN,
             self.SCENARIO_AMOUNT_COLUMN,
+            self.SCENARIO_AMOUNT_BASIS_COLUMN,
+            self.SCENARIO_TARGET_COLUMN,
+            self.SCENARIO_FREQUENCY_COLUMN,
             self.SCENARIO_START_COLUMN,
             self.SCENARIO_END_COLUMN,
         }:
@@ -2192,6 +2206,16 @@ class PlannerWindow(QMainWindow):
             return (1, 0.0)
         return (0, amount if ascending else -amount)
 
+    def _scenario_option_sort_key(self, value: str, *, options: list[str], ascending: bool) -> tuple[int, int]:
+        normalized = value.strip()
+        if not normalized:
+            return (1, 0)
+        try:
+            index = options.index(normalized)
+        except ValueError:
+            return (1, 0)
+        return (0, index if ascending else -index)
+
     def _sort_scenario_by_category(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
         return sorted(
             rows,
@@ -2219,6 +2243,50 @@ class PlannerWindow(QMainWindow):
             ),
         )
 
+    def _sort_scenario_by_amount_basis(
+        self,
+        rows: list[tuple[int, list[str | bool]]],
+        *,
+        ascending: bool,
+    ) -> list[tuple[int, list[str | bool]]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                self._scenario_option_sort_key(
+                    str(row[1][self.SCENARIO_AMOUNT_BASIS_COLUMN]),
+                    options=AMOUNT_BASIS_OPTIONS,
+                    ascending=ascending,
+                ),
+                row[0],
+            ),
+        )
+
+    def _sort_scenario_by_target(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                self._scenario_option_sort_key(
+                    str(row[1][self.SCENARIO_TARGET_COLUMN]),
+                    options=TARGET_OPTIONS,
+                    ascending=ascending,
+                ),
+                row[0],
+            ),
+        )
+
+    def _sort_scenario_by_frequency(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                self._scenario_option_sort_key(
+                    str(row[1][self.SCENARIO_FREQUENCY_COLUMN]),
+                    options=FREQUENCY_OPTIONS,
+                    ascending=ascending,
+                ),
+                row[0],
+            ),
+        )
+
     def _sort_scenario_by_end_date(self, rows: list[tuple[int, list[str | bool]]], *, ascending: bool) -> list[tuple[int, list[str | bool]]]:
         return sorted(
             rows,
@@ -2232,6 +2300,9 @@ class PlannerWindow(QMainWindow):
         if self._scenario_sort_column not in {
             self.SCENARIO_CATEGORY_COLUMN,
             self.SCENARIO_AMOUNT_COLUMN,
+            self.SCENARIO_AMOUNT_BASIS_COLUMN,
+            self.SCENARIO_TARGET_COLUMN,
+            self.SCENARIO_FREQUENCY_COLUMN,
             self.SCENARIO_START_COLUMN,
             self.SCENARIO_END_COLUMN,
         }:
@@ -2248,6 +2319,12 @@ class PlannerWindow(QMainWindow):
             ordered_rows = self._sort_scenario_by_category(rows, ascending=self._scenario_sort_ascending)
         elif self._scenario_sort_column == self.SCENARIO_AMOUNT_COLUMN:
             ordered_rows = self._sort_scenario_by_amount(rows, ascending=self._scenario_sort_ascending)
+        elif self._scenario_sort_column == self.SCENARIO_AMOUNT_BASIS_COLUMN:
+            ordered_rows = self._sort_scenario_by_amount_basis(rows, ascending=self._scenario_sort_ascending)
+        elif self._scenario_sort_column == self.SCENARIO_TARGET_COLUMN:
+            ordered_rows = self._sort_scenario_by_target(rows, ascending=self._scenario_sort_ascending)
+        elif self._scenario_sort_column == self.SCENARIO_FREQUENCY_COLUMN:
+            ordered_rows = self._sort_scenario_by_frequency(rows, ascending=self._scenario_sort_ascending)
         elif self._scenario_sort_column == self.SCENARIO_START_COLUMN:
             ordered_rows = self._sort_scenario_by_start_date(rows, ascending=self._scenario_sort_ascending)
         else:
@@ -2280,7 +2357,7 @@ class PlannerWindow(QMainWindow):
         )
 
     def _create_scenario_combo_widget(self, row: int, column: int, options: list[str]) -> QComboBox:
-        combo = QComboBox(self.scenario_table)
+        combo = ScenarioComboBox(self.scenario_table)
         combo.addItems(options)
         combo.setFrame(False)
         combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -2335,7 +2412,10 @@ class PlannerWindow(QMainWindow):
 
         if previous_suspend:
             return
+        row_id = self._scenario_row_id(row)
         self.scenario_table.setCurrentCell(row, column)
+        if self._scenario_sort_column == column:
+            self._sort_scenario_table(select_row_id=row_id)
         self._mark_dirty()
 
     def _focus_scenario_combo_cell(self, combo: QComboBox, column: int) -> None:
