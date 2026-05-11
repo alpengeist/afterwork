@@ -16,6 +16,7 @@ from afterwork.domain import (
 
 class SimulationEngine:
     def run(self, plan: Plan) -> SimulationResult:
+        self._validate_plan(plan)
         records: list[MonthlyRecord] = []
         cash_balance = plan.starting_cash_balance
         portfolio_balance = plan.portfolio.starting_balance
@@ -87,13 +88,16 @@ class SimulationEngine:
 
             if effective_cash_balance < plan.minimal_cash_level and plan.portfolio_withdrawal > 0:
                 while effective_cash_balance < plan.minimal_cash_level:
-                    portfolio_transfer_nominal += plan.portfolio_withdrawal
-                    cash_balance += plan.portfolio_withdrawal
-                    portfolio_balance -= plan.portfolio_withdrawal
-                    effective_cash_balance += plan.portfolio_withdrawal
+                    net_withdrawal = plan.portfolio_withdrawal
+                    gross_withdrawal = self._gross_portfolio_sale(net_withdrawal, plan.capital_gains_tax_rate)
+                    portfolio_transfer_nominal += gross_withdrawal
+                    cash_balance += net_withdrawal
+                    portfolio_balance -= gross_withdrawal
+                    effective_cash_balance += net_withdrawal
             elif effective_cash_balance <= 0:
-                portfolio_transfer_nominal = -effective_cash_balance
-                cash_balance += portfolio_transfer_nominal
+                net_withdrawal = -effective_cash_balance
+                portfolio_transfer_nominal = self._gross_portfolio_sale(net_withdrawal, plan.capital_gains_tax_rate)
+                cash_balance += net_withdrawal
                 portfolio_balance -= portfolio_transfer_nominal
 
             portfolio_underflow = portfolio_balance < 0
@@ -118,6 +122,15 @@ class SimulationEngine:
             )
 
         return SimulationResult(records=records)
+
+    def _validate_plan(self, plan: Plan) -> None:
+        if not 0.0 <= plan.capital_gains_tax_rate < 1.0:
+            raise ValueError("capital_gains_tax_rate must be between 0.0 and 1.0")
+
+    def _gross_portfolio_sale(self, net_amount: float, tax_rate: float) -> float:
+        if net_amount <= 0:
+            return 0.0
+        return net_amount / (1.0 - tax_rate)
 
     def _shock_multiplier(self, shocks: list[MarketShock], *, current_month: date, previous_month: date) -> float:
         current_factor = 1.0

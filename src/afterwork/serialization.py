@@ -26,6 +26,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
         "starting_cash_balance": plan.starting_cash_balance,
         "minimal_cash_level": plan.minimal_cash_level,
         "portfolio_withdrawal": plan.portfolio_withdrawal,
+        "capital_gains_tax_rate": plan.capital_gains_tax_rate,
         "portfolio": {
             "starting_balance": plan.portfolio.starting_balance,
             "annual_growth_rate": plan.portfolio.annual_growth_rate,
@@ -121,6 +122,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
         starting_cash_balance=float(data.get("starting_cash_balance", 0.0)),
         minimal_cash_level=float(data.get("minimal_cash_level", 0.0)),
         portfolio_withdrawal=float(data.get("portfolio_withdrawal", 0.0)),
+        capital_gains_tax_rate=float(data.get("capital_gains_tax_rate", 0.0)),
         portfolio=Portfolio(
             starting_balance=float(portfolio_data.get("starting_balance", 0.0)),
             annual_growth_rate=float(portfolio_data.get("annual_growth_rate", 0.0)),

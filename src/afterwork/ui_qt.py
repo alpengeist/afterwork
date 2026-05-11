@@ -1428,6 +1428,11 @@ class PlannerWindow(QMainWindow):
         self.portfolio_withdrawal_spin.setRange(0, 9_999_999)
         self.portfolio_withdrawal_spin.setDecimals(0)
         self.portfolio_withdrawal_spin.setValue(0)
+        self.capital_gains_tax_spin = QDoubleSpinBox()
+        self.capital_gains_tax_spin.setRange(0.0, 99.99)
+        self.capital_gains_tax_spin.setDecimals(2)
+        self.capital_gains_tax_spin.setSingleStep(0.25)
+        self.capital_gains_tax_spin.setValue(0.0)
         self.portfolio_start_spin = QDoubleSpinBox()
         self.portfolio_start_spin.setRange(-9_999_999, 9_999_999)
         self.portfolio_start_spin.setDecimals(0)
@@ -1443,6 +1448,7 @@ class PlannerWindow(QMainWindow):
             self.starting_cash_spin,
             self.minimal_cash_level_spin,
             self.portfolio_withdrawal_spin,
+            self.capital_gains_tax_spin,
             self.portfolio_start_spin,
             self.portfolio_growth_spin,
         ]:
@@ -1455,6 +1461,7 @@ class PlannerWindow(QMainWindow):
         self._set_compact_width(self.starting_cash_spin, "-9999999", 48)
         self._set_compact_width(self.minimal_cash_level_spin, "9999999", 48)
         self._set_compact_width(self.portfolio_withdrawal_spin, "9999999", 48)
+        self._set_compact_width(self.capital_gains_tax_spin, "99.99", 48)
         self._set_compact_width(self.portfolio_start_spin, "-9999999", 48)
         self._set_compact_width(self.portfolio_growth_spin, "-10.0", 48)
 
@@ -1469,7 +1476,8 @@ class PlannerWindow(QMainWindow):
             ("Target Age", self.target_age_spin),
             ("Starting Cash", self.starting_cash_spin),
             ("Minimal Cash Level", self.minimal_cash_level_spin),
-            ("Portfolio Withdrawal", self.portfolio_withdrawal_spin),
+            ("Portfolio Withdrawal (Net)", self.portfolio_withdrawal_spin),
+            ("Capital Gains Tax %", self.capital_gains_tax_spin),
             ("Starting Portfolio", self.portfolio_start_spin),
             ("Portfolio Growth %", self.portfolio_growth_spin),
         ]
@@ -1835,6 +1843,7 @@ class PlannerWindow(QMainWindow):
         self.starting_cash_spin.valueChanged.connect(self._on_plan_input_changed)
         self.minimal_cash_level_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_withdrawal_spin.valueChanged.connect(self._on_plan_input_changed)
+        self.capital_gains_tax_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_start_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_growth_spin.valueChanged.connect(self._on_plan_input_changed)
 
@@ -2725,6 +2734,7 @@ class PlannerWindow(QMainWindow):
             starting_cash_balance=self.starting_cash_spin.value(),
             minimal_cash_level=self.minimal_cash_level_spin.value(),
             portfolio_withdrawal=self.portfolio_withdrawal_spin.value(),
+            capital_gains_tax_rate=self.capital_gains_tax_spin.value() / 100.0,
             portfolio=Portfolio(
                 starting_balance=self.portfolio_start_spin.value(),
                 annual_growth_rate=self.portfolio_growth_spin.value() / 100.0,
@@ -2831,6 +2841,7 @@ class PlannerWindow(QMainWindow):
             self.starting_cash_spin.setValue(plan.starting_cash_balance)
             self.minimal_cash_level_spin.setValue(plan.minimal_cash_level)
             self.portfolio_withdrawal_spin.setValue(plan.portfolio_withdrawal)
+            self.capital_gains_tax_spin.setValue(plan.capital_gains_tax_rate * 100.0)
             self.portfolio_start_spin.setValue(plan.portfolio.starting_balance)
             self.portfolio_growth_spin.setValue(plan.portfolio.annual_growth_rate * 100.0)
 

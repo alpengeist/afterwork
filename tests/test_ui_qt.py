@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -13,6 +14,7 @@ from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QApplication
 
 from afterwork.app_settings import SettingsStore
+from afterwork.domain import Plan
 from afterwork.engine import SimulationEngine
 from afterwork.ui_qt import PlannerWindow
 
@@ -182,6 +184,26 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
         self.assertEqual(plan.market_shocks[0].starts_on.isoformat(), self.window.start_month_edit.text())
         self.assertAlmostEqual(plan.market_shocks[0].drawdown_pct, 0.35)
         self.assertEqual(payload["_ui"]["shock_rows"][0]["start"], "start")
+
+    def test_capital_gains_tax_round_trips_through_plan_save_load(self) -> None:
+        self.window.capital_gains_tax_spin.setValue(26.38)
+
+        plan = self.window._build_plan()
+        payload = self.window._save_payload(plan)
+        path = Path(self.temp_dir.name) / "plan.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        other_window = PlannerWindow(SettingsStore(Path(self.temp_dir.name) / "other-settings.json"))
+        other_window.autosave_timer.stop()
+        try:
+            self.assertTrue(other_window.load_plan_from_path(path))
+            loaded_plan = other_window._build_plan()
+            self.assertIsInstance(loaded_plan, Plan)
+            self.assertAlmostEqual(plan.capital_gains_tax_rate, 0.2638)
+            self.assertAlmostEqual(loaded_plan.capital_gains_tax_rate, 0.2638)
+            self.assertAlmostEqual(other_window.capital_gains_tax_spin.value(), 26.38)
+        finally:
+            other_window.close()
 
     def test_balance_chart_series_includes_starting_point_before_month_one_shock(self) -> None:
         self.window.add_market_shock()

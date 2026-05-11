@@ -99,6 +99,37 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(record.cash_balance, 1_000.0)
         self.assertEqual(record.portfolio_balance, 4_600.0)
 
+    def test_minimum_cash_portfolio_withdrawal_is_grossed_up_for_capital_gains_tax(self) -> None:
+        plan = Plan(
+            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
+            start_month=date(2026, 1, 1),
+            minimal_cash_level=1_000.0,
+            portfolio_withdrawal=1_000.0,
+            capital_gains_tax_rate=0.25,
+            portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
+        )
+
+        record = SimulationEngine().run(plan).records[0]
+
+        self.assertEqual(record.cash_balance, 1_000.0)
+        self.assertAlmostEqual(record.portfolio_transfer_nominal, 1_333.3333333333333)
+        self.assertAlmostEqual(record.portfolio_balance, 3_666.6666666666665)
+
+    def test_exact_cash_replenishment_is_grossed_up_for_capital_gains_tax(self) -> None:
+        plan = Plan(
+            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
+            start_month=date(2026, 1, 1),
+            starting_cash_balance=-100.0,
+            capital_gains_tax_rate=0.25,
+            portfolio=Portfolio(starting_balance=1_000.0, annual_growth_rate=0.0),
+        )
+
+        record = SimulationEngine().run(plan).records[0]
+
+        self.assertEqual(record.cash_balance, 0.0)
+        self.assertAlmostEqual(record.portfolio_transfer_nominal, 133.33333333333334)
+        self.assertAlmostEqual(record.portfolio_balance, 866.6666666666666)
+
     def test_portfolio_target_one_off_event_changes_total_like_cash_target(self) -> None:
         plan_base = Plan(
             person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
