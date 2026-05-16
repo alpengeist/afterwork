@@ -120,7 +120,7 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
         self.window.add_recurring_flow()
         invest_row = self.window.scenario_table.rowCount() - 1
         invest_target_combo = self.window.scenario_table.cellWidget(invest_row, self.window.SCENARIO_TARGET_COLUMN)
-        invest_target_combo.setCurrentText("invest")
+        invest_target_combo.setCurrentText("PF Transfer")
 
         self.window.add_one_off_event()
 
@@ -196,6 +196,9 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
 
         self.assertTrue(self.window.load_plan_from_path(path))
         self.assertEqual(self.window._scenario_value(0, self.window.SCENARIO_TARGET_COLUMN), "invest")
+        combo = self.window.scenario_table.cellWidget(0, self.window.SCENARIO_TARGET_COLUMN)
+        self.assertIsInstance(combo, QComboBox)
+        self.assertEqual(combo.currentText(), "PF Transfer")
 
     def test_scenario_combo_ignores_mouse_wheel_when_closed(self) -> None:
         self.window.add_recurring_flow()
@@ -240,10 +243,24 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
 
         record = self.window.current_result.records[0]
         self.assertEqual(self.window.results_table.item(0, 2).text(), "500")
-        self.assertEqual(self.window.results_table.item(0, 6).text(), "25500")
-        self.assertEqual(self.window.results_table.item(0, 7).text(), f"{record.portfolio_balance:.0f}")
-        self.assertEqual(self.window.results_table.item(0, 8).text(), f"{record.total_balance:.0f}")
+        self.assertEqual(self.window.results_table.item(0, 6).text(), "")
+        self.assertEqual(self.window.results_table.item(0, 7).text(), "25500")
+        self.assertEqual(self.window.results_table.item(0, 8).text(), f"{record.portfolio_balance:.0f}")
+        self.assertEqual(self.window.results_table.item(0, 9).text(), f"{record.total_balance:.0f}")
         self.assertNotIn(".00", self.window.summary_label.text())
+
+    def test_negative_pf_transfer_results_show_annualized_withdrawal_rate(self) -> None:
+        self.window.capital_gains_tax_spin.setValue(25.0)
+        self.window.add_recurring_flow()
+        row = self.window.scenario_table.rowCount() - 1
+        self.window.scenario_table.item(row, self.window.SCENARIO_AMOUNT_COLUMN).setText("-400")
+        target_combo = self.window.scenario_table.cellWidget(row, self.window.SCENARIO_TARGET_COLUMN)
+        self.assertIsInstance(target_combo, QComboBox)
+        target_combo.setCurrentText("PF Transfer")
+
+        self.window.run_simulation()
+
+        self.assertEqual(self.window.results_table.item(0, 6).text(), "9.6%")
 
     def test_amount_editor_commits_on_enter_and_next_click_works(self) -> None:
         self.window.show()
@@ -348,11 +365,29 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
 
     def test_zero_balance_warning_includes_age(self) -> None:
         self.window.birthday_edit.setText("1986-01-01")
-        self.window._update_zero_balance_warning(date(2050, 7, 1))
+        self.window._update_zero_balance_warning(date(2050, 7, 1), None)
 
         self.assertEqual(
             self.window.zero_balance_warning_label.text(),
             "Warning: total value reaches zero on 2050-07-01 at age 64.5.",
+        )
+
+    def test_cash_zero_warning_includes_age(self) -> None:
+        self.window.birthday_edit.setText("1986-01-01")
+        self.window._update_zero_balance_warning(None, date(2040, 1, 1))
+
+        self.assertEqual(
+            self.window.zero_balance_warning_label.text(),
+            "Warning: cash balance reaches zero on 2040-01-01 at age 54.0.",
+        )
+
+    def test_combined_cash_and_total_zero_warning_lists_both_dates(self) -> None:
+        self.window.birthday_edit.setText("1986-01-01")
+        self.window._update_zero_balance_warning(date(2050, 7, 1), date(2040, 1, 1))
+
+        self.assertEqual(
+            self.window.zero_balance_warning_label.text(),
+            "Warning: cash balance reaches zero on 2040-01-01 at age 54.0; total value reaches zero on 2050-07-01 at age 64.5.",
         )
 
     def test_build_plan_and_ui_payload_include_market_shocks(self) -> None:

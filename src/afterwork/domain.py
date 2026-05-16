@@ -169,8 +169,6 @@ class Plan:
     person: Person
     start_month: date
     starting_cash_balance: float = 0.0
-    minimal_cash_level: float = 0.0
-    portfolio_withdrawal: float = 0.0
     capital_gains_tax_rate: float = 0.0
     portfolio: Portfolio = field(default_factory=Portfolio)
     recurring_flows: list[RecurringFlow] = field(default_factory=list)
@@ -189,6 +187,7 @@ class MonthlyRecord:
     portfolio_contribution_nominal: float
     portfolio_growth_nominal: float
     portfolio_transfer_nominal: float
+    net_portfolio_withdrawal_rate_annual: float | None
     flow_present_value: float
     cash_balance: float
     portfolio_balance: float

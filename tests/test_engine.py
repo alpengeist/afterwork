@@ -75,18 +75,19 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(record.cash_balance, 600.0)
         self.assertEqual(record.portfolio_balance, 5_400.0)
         self.assertEqual(record.total_balance, 6_000.0)
+        self.assertEqual(record.portfolio_transfer_nominal, 400.0)
+        self.assertIsNone(record.net_portfolio_withdrawal_rate_annual)
 
-    def test_positive_invest_target_recurring_flow_can_trigger_minimum_cash_replenishment(self) -> None:
+    def test_negative_invest_target_recurring_flow_moves_cash_from_portfolio_with_tax_gross_up(self) -> None:
         plan = Plan(
             person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
             start_month=date(2026, 1, 1),
             starting_cash_balance=1_000.0,
-            minimal_cash_level=1_000.0,
-            portfolio_withdrawal=300.0,
+            capital_gains_tax_rate=0.25,
             portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
             recurring_flows=[
                 RecurringFlow(
-                    amount=400.0,
+                    amount=-400.0,
                     frequency=Frequency.MONTHLY,
                     starts_on=date(2026, 1, 1),
                     target=FlowTarget.INVEST,
@@ -96,9 +97,11 @@ class SimulationEngineTests(unittest.TestCase):
 
         record = SimulationEngine().run(plan).records[0]
 
-        self.assertEqual(record.cash_balance, 1_200.0)
-        self.assertEqual(record.portfolio_balance, 4_800.0)
-        self.assertEqual(record.portfolio_transfer_nominal, 600.0)
+        self.assertEqual(record.cash_balance, 1_400.0)
+        self.assertAlmostEqual(record.portfolio_balance, 4_466.666666666667)
+        self.assertAlmostEqual(record.total_balance, 5_866.666666666667)
+        self.assertAlmostEqual(record.portfolio_transfer_nominal, -533.3333333333334)
+        self.assertAlmostEqual(record.net_portfolio_withdrawal_rate_annual, 0.96)
 
     def test_negative_portfolio_target_recurring_flow_reduces_portfolio_without_changing_cash(self) -> None:
         plan = Plan(
@@ -121,36 +124,28 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(record.cash_balance, 1_000.0)
         self.assertEqual(record.portfolio_balance, 4_600.0)
 
-    def test_minimum_cash_portfolio_withdrawal_is_grossed_up_for_capital_gains_tax(self) -> None:
+    def test_negative_invest_target_recurring_flow_uses_net_amount_for_withdrawal_rate(self) -> None:
         plan = Plan(
             person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
             start_month=date(2026, 1, 1),
-            minimal_cash_level=1_000.0,
-            portfolio_withdrawal=1_000.0,
             capital_gains_tax_rate=0.25,
             portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
+            recurring_flows=[
+                RecurringFlow(
+                    amount=-1_000.0,
+                    frequency=Frequency.MONTHLY,
+                    starts_on=date(2026, 1, 1),
+                    target=FlowTarget.INVEST,
+                )
+            ],
         )
 
         record = SimulationEngine().run(plan).records[0]
 
         self.assertEqual(record.cash_balance, 1_000.0)
-        self.assertAlmostEqual(record.portfolio_transfer_nominal, 1_333.3333333333333)
+        self.assertAlmostEqual(record.portfolio_transfer_nominal, -1_333.3333333333333)
         self.assertAlmostEqual(record.portfolio_balance, 3_666.6666666666665)
-
-    def test_exact_cash_replenishment_is_grossed_up_for_capital_gains_tax(self) -> None:
-        plan = Plan(
-            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
-            start_month=date(2026, 1, 1),
-            starting_cash_balance=-100.0,
-            capital_gains_tax_rate=0.25,
-            portfolio=Portfolio(starting_balance=1_000.0, annual_growth_rate=0.0),
-        )
-
-        record = SimulationEngine().run(plan).records[0]
-
-        self.assertEqual(record.cash_balance, 0.0)
-        self.assertAlmostEqual(record.portfolio_transfer_nominal, 133.33333333333334)
-        self.assertAlmostEqual(record.portfolio_balance, 866.6666666666666)
+        self.assertAlmostEqual(record.net_portfolio_withdrawal_rate_annual, 2.4)
 
     def test_portfolio_target_one_off_event_changes_total_like_cash_target(self) -> None:
         plan_base = Plan(
@@ -214,6 +209,30 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(record.cash_balance, 600.0)
         self.assertEqual(record.portfolio_balance, 5_400.0)
         self.assertEqual(record.total_balance, 6_000.0)
+        self.assertEqual(record.portfolio_transfer_nominal, 400.0)
+
+    def test_negative_invest_target_one_off_event_moves_cash_from_portfolio_with_tax_gross_up(self) -> None:
+        plan = Plan(
+            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
+            start_month=date(2026, 1, 1),
+            starting_cash_balance=1_000.0,
+            capital_gains_tax_rate=0.25,
+            portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
+            one_off_events=[
+                OneOffEvent(
+                    amount=-400.0,
+                    occurs_on=date(2026, 1, 1),
+                    target=FlowTarget.INVEST,
+                )
+            ],
+        )
+
+        record = SimulationEngine().run(plan).records[0]
+
+        self.assertEqual(record.cash_balance, 1_400.0)
+        self.assertAlmostEqual(record.portfolio_balance, 4_466.666666666667)
+        self.assertAlmostEqual(record.portfolio_transfer_nominal, -533.3333333333334)
+        self.assertAlmostEqual(record.net_portfolio_withdrawal_rate_annual, 0.96)
 
     def test_one_off_event_flow_present_value_is_discounted_for_future_months(self) -> None:
         plan = Plan(

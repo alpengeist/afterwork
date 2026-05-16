@@ -156,8 +156,6 @@ Conceptually:
 - person
 - start month
 - starting cash balance
-- minimal cash level
-- portfolio withdrawal step
 - portfolio settings
 - recurring flows
 - one-off events
@@ -177,8 +175,7 @@ This is the most important conceptual modeling choice in the app.
 
 It allows flows and events to target either bucket, makes liquidity visible, and supports policies such as:
 
-- keep cash above a minimum level
-- replenish cash from the portfolio in fixed withdrawal steps
+- transfer money explicitly between cash and portfolio
 
 Without this separation, the planner would lose the distinction between solvency and liquidity.
 
@@ -225,9 +222,9 @@ For each simulated month:
 4. Discount flows into present value for reporting.
 5. Update cash balance.
 6. Update portfolio with contributions.
-7. Apply normal portfolio growth.
-8. Apply market shock multiplier for the month.
-9. Transfer money from portfolio to cash if liquidity rules require it.
+7. Apply any explicit cash-portfolio transfer rows, including taxed portfolio withdrawals.
+8. Apply normal portfolio growth.
+9. Apply market shock multiplier for the month.
 10. Record the resulting balances and metadata.
 
 This is effectively a discrete-event financial simulation with fixed monthly time steps.
@@ -333,31 +330,15 @@ That means the shock changes the portfolio path incrementally month by month rat
 Multiple shocks are combined multiplicatively.
 
 
-### 8. Liquidity Management Algorithm
+### 8. Explicit Portfolio Transfer Algorithm
 
-After flows and growth are applied, the engine enforces liquidity rules.
+Transfers between cash and portfolio are modeled as explicit scenario rows targeting `invest`.
 
-Two cases exist:
+Rules:
 
-### Case A: Maintain a minimum cash level
-
-If:
-
-- `cash_balance < minimal_cash_level`
-- and `portfolio_withdrawal > 0`
-
-then the engine repeatedly transfers a fixed withdrawal amount from portfolio to cash until cash reaches the configured minimum.
-
-This models stepped withdrawals rather than exact balancing.
-
-### Case B: Prevent negative cash
-
-If the minimum-cash policy is not active and cash falls below or equal to zero, the engine transfers exactly enough from portfolio to bring cash back to zero.
-
-This ensures the simulation can distinguish:
-
-- running low on cash
-- exhausting the portfolio
+- Positive amounts move cash into the portfolio.
+- Negative amounts move money from portfolio to cash.
+- Negative transfer amounts are treated as net cash received; the engine grosses up the portfolio sale for capital-gains tax.
 
 If portfolio goes negative, the month is marked with `portfolio_underflow`.
 
@@ -372,6 +353,7 @@ Each month produces a `MonthlyRecord` that contains:
 - nominal portfolio contribution
 - nominal portfolio growth
 - nominal portfolio transfer
+- annualized net portfolio withdrawal rate, when applicable
 - flow present value
 - cash balance
 - portfolio balance

@@ -34,6 +34,7 @@ class SimulationEngine:
             applied_names: list[str] = []
             cash_flow_nominal = 0.0
             portfolio_contribution_nominal = 0.0
+            transfer_amounts: list[float] = []
             flow_present_value = 0.0
 
             for flow in active_recurring_flows:
@@ -44,9 +45,12 @@ class SimulationEngine:
                     continue
                 adjusted_amount = flow.nominal_amount_for_month(plan.start_month, current_month)
 
-                cash_delta, portfolio_delta = self._target_deltas(flow.target, adjusted_amount)
-                cash_flow_nominal += cash_delta
-                portfolio_contribution_nominal += portfolio_delta
+                if flow.target == FlowTarget.INVEST:
+                    transfer_amounts.append(adjusted_amount)
+                else:
+                    cash_delta, portfolio_delta = self._target_deltas(flow.target, adjusted_amount)
+                    cash_flow_nominal += cash_delta
+                    portfolio_contribution_nominal += portfolio_delta
 
                 flow_present_value += flow.present_value(adjusted_amount, period_index)
                 applied_names.append(flow.display_label)
@@ -55,15 +59,45 @@ class SimulationEngine:
                 if not event.occurs_in_month(current_month):
                     continue
 
-                cash_delta, portfolio_delta = self._target_deltas(event.target, event.amount)
-                cash_flow_nominal += cash_delta
-                portfolio_contribution_nominal += portfolio_delta
+                if event.target == FlowTarget.INVEST:
+                    transfer_amounts.append(event.amount)
+                else:
+                    cash_delta, portfolio_delta = self._target_deltas(event.target, event.amount)
+                    cash_flow_nominal += cash_delta
+                    portfolio_contribution_nominal += portfolio_delta
 
                 flow_present_value += event.amount / ((1 + monthly_discount_rate) ** period_index)
                 applied_names.append(event.display_label)
 
             cash_balance += cash_flow_nominal
             portfolio_balance += portfolio_contribution_nominal
+            portfolio_transfer_nominal = 0.0
+            net_portfolio_withdrawal_rate_annual: float | None = None
+            net_portfolio_withdrawal_nominal = 0.0
+            withdrawal_base_nominal: float | None = None
+
+            for transfer_amount in transfer_amounts:
+                if transfer_amount >= 0:
+                    cash_balance -= transfer_amount
+                    portfolio_balance += transfer_amount
+                    portfolio_transfer_nominal += transfer_amount
+                    continue
+
+                if withdrawal_base_nominal is None:
+                    withdrawal_base_nominal = portfolio_balance
+
+                net_withdrawal = -transfer_amount
+                gross_withdrawal = self._gross_portfolio_sale(net_withdrawal, plan.capital_gains_tax_rate)
+                cash_balance += net_withdrawal
+                portfolio_balance -= gross_withdrawal
+                portfolio_transfer_nominal -= gross_withdrawal
+                net_portfolio_withdrawal_nominal += net_withdrawal
+
+            if withdrawal_base_nominal is not None and withdrawal_base_nominal > 0 and net_portfolio_withdrawal_nominal > 0:
+                net_portfolio_withdrawal_rate_annual = (
+                    net_portfolio_withdrawal_nominal * 12.0 / withdrawal_base_nominal
+                )
+
             shock_multiplier = self._shock_multiplier(
                 active_market_shocks,
                 current_month=current_month,
@@ -71,28 +105,11 @@ class SimulationEngine:
             )
             portfolio_growth_nominal = portfolio_balance * (base_growth_multiplier * shock_multiplier - 1.0)
             portfolio_balance += portfolio_growth_nominal
-            portfolio_transfer_nominal = 0.0
             applied_names.extend(
                 shock.display_label
                 for shock in active_market_shocks
                 if self._shock_applies_in_month(shock, current_month)
             )
-
-            effective_cash_balance = cash_balance
-
-            if effective_cash_balance < plan.minimal_cash_level and plan.portfolio_withdrawal > 0:
-                while effective_cash_balance < plan.minimal_cash_level:
-                    net_withdrawal = plan.portfolio_withdrawal
-                    gross_withdrawal = self._gross_portfolio_sale(net_withdrawal, plan.capital_gains_tax_rate)
-                    portfolio_transfer_nominal += gross_withdrawal
-                    cash_balance += net_withdrawal
-                    portfolio_balance -= gross_withdrawal
-                    effective_cash_balance += net_withdrawal
-            elif effective_cash_balance <= 0:
-                net_withdrawal = -effective_cash_balance
-                portfolio_transfer_nominal = self._gross_portfolio_sale(net_withdrawal, plan.capital_gains_tax_rate)
-                cash_balance += net_withdrawal
-                portfolio_balance -= portfolio_transfer_nominal
 
             portfolio_underflow = portfolio_balance < 0
             total_balance = cash_balance + portfolio_balance
@@ -106,6 +123,7 @@ class SimulationEngine:
                     portfolio_contribution_nominal=portfolio_contribution_nominal,
                     portfolio_growth_nominal=portfolio_growth_nominal,
                     portfolio_transfer_nominal=portfolio_transfer_nominal,
+                    net_portfolio_withdrawal_rate_annual=net_portfolio_withdrawal_rate_annual,
                     flow_present_value=flow_present_value,
                     cash_balance=cash_balance,
                     portfolio_balance=portfolio_balance,
@@ -131,7 +149,7 @@ class SimulationEngine:
             return amount, 0.0
         if target == FlowTarget.PORTFOLIO:
             return 0.0, amount
-        return -amount, amount
+        raise ValueError(f"Unsupported non-transfer target: {target!r}")
 
     def _shock_multiplier(self, shocks: list[MarketShock], *, current_month: date, previous_month: date) -> float:
         current_factor = 1.0

@@ -68,7 +68,8 @@ RESULT_HEADERS = [
     "Cash Flow",
     "Portfolio In",
     "Portfolio Growth",
-    "Portfolio Out",
+    "PF Transfer",
+    "Net PF Withdraw % p.a.",
     "Cash Balance",
     "Portfolio Value",
     "Total Value",
@@ -77,6 +78,12 @@ RESULT_HEADERS = [
 FREQUENCY_OPTIONS = [frequency.value for frequency in Frequency]
 AMOUNT_BASIS_OPTIONS = [basis.value for basis in AmountBasis]
 TARGET_OPTIONS = [FlowTarget.CASH.value, FlowTarget.INVEST.value, FlowTarget.PORTFOLIO.value]
+TARGET_LABELS = {
+    FlowTarget.CASH.value: FlowTarget.CASH.value,
+    FlowTarget.INVEST.value: "PF Transfer",
+    FlowTarget.PORTFOLIO.value: FlowTarget.PORTFOLIO.value,
+}
+TARGET_DISPLAY_TO_VALUE = {label: value for value, label in TARGET_LABELS.items()}
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 STEP_PLUS_ICON = (ASSET_DIR / "step-plus.svg").as_posix()
 STEP_MINUS_ICON = (ASSET_DIR / "step-minus.svg").as_posix()
@@ -1433,14 +1440,6 @@ class PlannerWindow(QMainWindow):
         self.starting_cash_spin.setRange(-9_999_999, 9_999_999)
         self.starting_cash_spin.setDecimals(0)
         self.starting_cash_spin.setValue(25_000)
-        self.minimal_cash_level_spin = QDoubleSpinBox()
-        self.minimal_cash_level_spin.setRange(0, 9_999_999)
-        self.minimal_cash_level_spin.setDecimals(0)
-        self.minimal_cash_level_spin.setValue(0)
-        self.portfolio_withdrawal_spin = QDoubleSpinBox()
-        self.portfolio_withdrawal_spin.setRange(0, 9_999_999)
-        self.portfolio_withdrawal_spin.setDecimals(0)
-        self.portfolio_withdrawal_spin.setValue(0)
         self.capital_gains_tax_spin = QDoubleSpinBox()
         self.capital_gains_tax_spin.setRange(0.0, 99.99)
         self.capital_gains_tax_spin.setDecimals(2)
@@ -1459,8 +1458,6 @@ class PlannerWindow(QMainWindow):
         for widget in [
             self.target_age_spin,
             self.starting_cash_spin,
-            self.minimal_cash_level_spin,
-            self.portfolio_withdrawal_spin,
             self.capital_gains_tax_spin,
             self.portfolio_start_spin,
             self.portfolio_growth_spin,
@@ -1472,8 +1469,6 @@ class PlannerWindow(QMainWindow):
         self._set_compact_width(self.birthday_edit, "1986-01-01", 34)
         self._set_compact_width(self.target_age_spin, "130", 40)
         self._set_compact_width(self.starting_cash_spin, "-9999999", 48)
-        self._set_compact_width(self.minimal_cash_level_spin, "9999999", 48)
-        self._set_compact_width(self.portfolio_withdrawal_spin, "9999999", 48)
         self._set_compact_width(self.capital_gains_tax_spin, "99.99", 48)
         self._set_compact_width(self.portfolio_start_spin, "-9999999", 48)
         self._set_compact_width(self.portfolio_growth_spin, "-10.0", 48)
@@ -1488,8 +1483,6 @@ class PlannerWindow(QMainWindow):
             ("Birthday", self.birthday_edit),
             ("Target Age", self.target_age_spin),
             ("Starting Cash", self.starting_cash_spin),
-            ("Minimal Cash Level", self.minimal_cash_level_spin),
-            ("Portfolio Withdrawal (Net)", self.portfolio_withdrawal_spin),
             ("Capital Gains Tax %", self.capital_gains_tax_spin),
             ("Starting Portfolio", self.portfolio_start_spin),
             ("Portfolio Growth %", self.portfolio_growth_spin),
@@ -1854,8 +1847,6 @@ class PlannerWindow(QMainWindow):
         self.birthday_edit.editingFinished.connect(self._on_plan_input_changed)
         self.target_age_spin.valueChanged.connect(self._on_plan_input_changed)
         self.starting_cash_spin.valueChanged.connect(self._on_plan_input_changed)
-        self.minimal_cash_level_spin.valueChanged.connect(self._on_plan_input_changed)
-        self.portfolio_withdrawal_spin.valueChanged.connect(self._on_plan_input_changed)
         self.capital_gains_tax_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_start_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_growth_spin.valueChanged.connect(self._on_plan_input_changed)
@@ -2223,6 +2214,7 @@ class PlannerWindow(QMainWindow):
 
     def _loaded_target_value(self, target: object, *, row_type: str, schema_version: int) -> str:
         normalized = str(target or FlowTarget.CASH.value).strip()
+        normalized = TARGET_DISPLAY_TO_VALUE.get(normalized, normalized)
         if row_type == "RecurringFlow" and schema_version < SCHEMA_VERSION and normalized == FlowTarget.PORTFOLIO.value:
             return FlowTarget.INVEST.value
         if normalized not in TARGET_OPTIONS:
@@ -2403,9 +2395,17 @@ class PlannerWindow(QMainWindow):
             Qt.SortOrder.AscendingOrder if self._scenario_sort_ascending else Qt.SortOrder.DescendingOrder,
         )
 
-    def _create_scenario_combo_widget(self, row: int, column: int, options: list[str]) -> QComboBox:
+    def _create_scenario_combo_widget(
+        self,
+        row: int,
+        column: int,
+        options: list[str],
+        *,
+        labels: dict[str, str] | None = None,
+    ) -> QComboBox:
         combo = ScenarioComboBox(self.scenario_table)
-        combo.addItems(options)
+        for option in options:
+            combo.addItem((labels or {}).get(option, option), option)
         combo.setFrame(False)
         combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._apply_scenario_combo_style(combo, enabled=self._scenario_enabled(row))
@@ -2453,7 +2453,8 @@ class PlannerWindow(QMainWindow):
         previous_suspend = self._suspend_change_tracking
         self._suspend_change_tracking = True
         try:
-            self._set_scenario_combo_item_value(item, combo.currentText())
+            value = combo.currentData(Qt.ItemDataRole.UserRole)
+            self._set_scenario_combo_item_value(item, str(value if value is not None else combo.currentText()))
         finally:
             self._suspend_change_tracking = previous_suspend
 
@@ -2507,7 +2508,8 @@ class PlannerWindow(QMainWindow):
                 combo = self._create_scenario_combo_widget(row, self.SCENARIO_AMOUNT_BASIS_COLUMN, AMOUNT_BASIS_OPTIONS)
                 self.scenario_table.setCellWidget(row, self.SCENARIO_AMOUNT_BASIS_COLUMN, combo)
             combo.blockSignals(True)
-            combo.setCurrentText(self._scenario_combo_item_value(item, AmountBasis.NOMINAL.value))
+            value = self._scenario_combo_item_value(item, AmountBasis.NOMINAL.value)
+            combo.setCurrentIndex(max(combo.findData(value, role=Qt.ItemDataRole.UserRole), 0))
             self._apply_scenario_combo_style(combo, enabled=self._scenario_enabled(row))
             combo.blockSignals(False)
             return
@@ -2537,10 +2539,16 @@ class PlannerWindow(QMainWindow):
 
         combo = self.scenario_table.cellWidget(row, self.SCENARIO_TARGET_COLUMN)
         if not isinstance(combo, QComboBox):
-            combo = self._create_scenario_combo_widget(row, self.SCENARIO_TARGET_COLUMN, TARGET_OPTIONS)
+            combo = self._create_scenario_combo_widget(
+                row,
+                self.SCENARIO_TARGET_COLUMN,
+                TARGET_OPTIONS,
+                labels=TARGET_LABELS,
+            )
             self.scenario_table.setCellWidget(row, self.SCENARIO_TARGET_COLUMN, combo)
         combo.blockSignals(True)
-        combo.setCurrentText(self._scenario_combo_item_value(item, FlowTarget.CASH.value))
+        value = self._scenario_combo_item_value(item, FlowTarget.CASH.value)
+        combo.setCurrentIndex(max(combo.findData(value, role=Qt.ItemDataRole.UserRole), 0))
         self._apply_scenario_combo_style(combo, enabled=self._scenario_enabled(row))
         combo.blockSignals(False)
 
@@ -2574,7 +2582,8 @@ class PlannerWindow(QMainWindow):
                 combo = self._create_scenario_combo_widget(row, self.SCENARIO_FREQUENCY_COLUMN, FREQUENCY_OPTIONS)
                 self.scenario_table.setCellWidget(row, self.SCENARIO_FREQUENCY_COLUMN, combo)
             combo.blockSignals(True)
-            combo.setCurrentText(self._scenario_combo_item_value(item, Frequency.MONTHLY.value))
+            value = self._scenario_combo_item_value(item, Frequency.MONTHLY.value)
+            combo.setCurrentIndex(max(combo.findData(value, role=Qt.ItemDataRole.UserRole), 0))
             self._apply_scenario_combo_style(combo, enabled=self._scenario_enabled(row))
             combo.blockSignals(False)
             return
@@ -2699,7 +2708,8 @@ class PlannerWindow(QMainWindow):
         if column in {self.SCENARIO_AMOUNT_BASIS_COLUMN, self.SCENARIO_TARGET_COLUMN, self.SCENARIO_FREQUENCY_COLUMN}:
             widget = self.scenario_table.cellWidget(row, column)
             if isinstance(widget, QComboBox):
-                return widget.currentText().strip()
+                value = widget.currentData(Qt.ItemDataRole.UserRole)
+                return str(value if value is not None else widget.currentText()).strip()
             return self._scenario_combo_item_value(item)
         return item.text().strip()
 
@@ -2708,6 +2718,11 @@ class PlannerWindow(QMainWindow):
             return f"{float(value):.0f}"
         except (TypeError, ValueError):
             return str(value).strip()
+
+    def _format_rate_text(self, value: float | None) -> str:
+        if value is None:
+            return ""
+        return f"{value * 100.0:.1f}%"
 
     def _scenario_enabled(self, row: int) -> bool:
         item = self.scenario_table.item(row, 0)
@@ -2776,8 +2791,6 @@ class PlannerWindow(QMainWindow):
             ),
             start_month=date.fromisoformat(self.start_month_edit.text().strip()),
             starting_cash_balance=self.starting_cash_spin.value(),
-            minimal_cash_level=self.minimal_cash_level_spin.value(),
-            portfolio_withdrawal=self.portfolio_withdrawal_spin.value(),
             capital_gains_tax_rate=self.capital_gains_tax_spin.value() / 100.0,
             portfolio=Portfolio(
                 starting_balance=self.portfolio_start_spin.value(),
@@ -2808,6 +2821,7 @@ class PlannerWindow(QMainWindow):
                 self._format_amount_text(record.portfolio_contribution_nominal),
                 self._format_amount_text(record.portfolio_growth_nominal),
                 self._format_amount_text(record.portfolio_transfer_nominal),
+                self._format_rate_text(record.net_portfolio_withdrawal_rate_annual),
                 self._format_amount_text(record.cash_balance),
                 self._format_amount_text(record.portfolio_balance),
                 self._format_amount_text(record.total_balance),
@@ -2815,7 +2829,7 @@ class PlannerWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if column == 7 and record.portfolio_underflow:
+                if column == 8 and record.portfolio_underflow:
                     item.setForeground(QColor("#b22222"))
                     item.setBackground(QColor("#fdeaea"))
                 self.results_table.setItem(row, column, item)
@@ -2885,8 +2899,6 @@ class PlannerWindow(QMainWindow):
             self.birthday_edit.setText(plan.person.birth_date.isoformat())
             self.target_age_spin.setValue(plan.person.target_age_years)
             self.starting_cash_spin.setValue(plan.starting_cash_balance)
-            self.minimal_cash_level_spin.setValue(plan.minimal_cash_level)
-            self.portfolio_withdrawal_spin.setValue(plan.portfolio_withdrawal)
             self.capital_gains_tax_spin.setValue(plan.capital_gains_tax_rate * 100.0)
             self.portfolio_start_spin.setValue(plan.portfolio.starting_balance)
             self.portfolio_growth_spin.setValue(plan.portfolio.annual_growth_rate * 100.0)
@@ -3014,7 +3026,7 @@ class PlannerWindow(QMainWindow):
             self.timeline_widget.set_timeline(None, None, [])
             self.balance_timeline_widget.set_timeline(None, None, [])
             self.event_timeline_widget.set_timeline(None, None, [])
-            self._update_zero_balance_warning(None)
+            self._update_zero_balance_warning(None, None)
             return
 
         plan_end = add_months(plan.start_month, max(plan.simulation_months() - 1, 0))
@@ -3024,14 +3036,17 @@ class PlannerWindow(QMainWindow):
             self.timeline_widget.set_timeline(None, None, [])
             self.balance_timeline_widget.set_timeline(None, None, [])
             self.event_timeline_widget.set_timeline(None, None, [])
-            self._update_zero_balance_warning(None)
+            self._update_zero_balance_warning(None, None)
             return
 
         scenario_series, balance_series = self._chart_series(plan, result, plan_end)
         self.timeline_widget.set_timeline(plan.start_month, plan_end, scenario_series)
         self.balance_timeline_widget.set_timeline(plan.start_month, plan_end, balance_series)
         self.event_timeline_widget.set_timeline(plan.start_month, plan_end, self._event_timeline_items(plan, plan_end))
-        self._update_zero_balance_warning(self._first_total_balance_zero_date(result))
+        self._update_zero_balance_warning(
+            self._first_total_balance_zero_date(result),
+            self._first_cash_balance_zero_date(result),
+        )
         self._update_chart_container_size()
 
     def _chart_series(self, plan: Plan, result, plan_end: date) -> tuple[list[ChartSeries], list[ChartSeries]]:
@@ -3159,21 +3174,37 @@ class PlannerWindow(QMainWindow):
                 return record.month
         return None
 
-    def _update_zero_balance_warning(self, zero_date: date | None) -> None:
-        if zero_date is None:
+    def _first_cash_balance_zero_date(self, result) -> date | None:
+        for record in result.records:
+            if record.cash_balance <= 0:
+                return record.month
+        return None
+
+    def _warning_age_text(self, warning_date: date | None) -> str:
+        if warning_date is None:
+            return ""
+        try:
+            birth_date = date.fromisoformat(self.birthday_edit.text().strip())
+            age_years = Person(birth_date=birth_date, target_age_years=self.target_age_spin.value()).age_years_at(warning_date)
+            return f" at age {age_years:.1f}"
+        except Exception:
+            return ""
+
+    def _update_zero_balance_warning(self, zero_date: date | None, cash_zero_date: date | None) -> None:
+        if zero_date is None and cash_zero_date is None:
             self.zero_balance_warning_label.hide()
             self.zero_balance_warning_label.setText("")
             return
-        age_text = ""
-        try:
-            birth_date = date.fromisoformat(self.birthday_edit.text().strip())
-            age_years = Person(birth_date=birth_date, target_age_years=self.target_age_spin.value()).age_years_at(zero_date)
-            age_text = f" at age {age_years:.1f}"
-        except Exception:
-            pass
-        self.zero_balance_warning_label.setText(
-            f"Warning: total value reaches zero on {zero_date.isoformat()}{age_text}."
-        )
+        messages: list[str] = []
+        if cash_zero_date is not None:
+            messages.append(
+                f"cash balance reaches zero on {cash_zero_date.isoformat()}{self._warning_age_text(cash_zero_date)}"
+            )
+        if zero_date is not None:
+            messages.append(
+                f"total value reaches zero on {zero_date.isoformat()}{self._warning_age_text(zero_date)}"
+            )
+        self.zero_balance_warning_label.setText(f"Warning: {'; '.join(messages)}.")
         self.zero_balance_warning_label.show()
 
     def _flow_series_color(self, index: int) -> QColor:
