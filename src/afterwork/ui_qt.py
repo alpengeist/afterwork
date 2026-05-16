@@ -1440,6 +1440,10 @@ class PlannerWindow(QMainWindow):
         self.starting_cash_spin.setRange(-9_999_999, 9_999_999)
         self.starting_cash_spin.setDecimals(0)
         self.starting_cash_spin.setValue(25_000)
+        self.cash_minimum_spin = QDoubleSpinBox()
+        self.cash_minimum_spin.setRange(-9_999_999, 9_999_999)
+        self.cash_minimum_spin.setDecimals(0)
+        self.cash_minimum_spin.setValue(0)
         self.capital_gains_tax_spin = QDoubleSpinBox()
         self.capital_gains_tax_spin.setRange(0.0, 99.99)
         self.capital_gains_tax_spin.setDecimals(2)
@@ -1458,6 +1462,7 @@ class PlannerWindow(QMainWindow):
         for widget in [
             self.target_age_spin,
             self.starting_cash_spin,
+            self.cash_minimum_spin,
             self.capital_gains_tax_spin,
             self.portfolio_start_spin,
             self.portfolio_growth_spin,
@@ -1469,6 +1474,7 @@ class PlannerWindow(QMainWindow):
         self._set_compact_width(self.birthday_edit, "1986-01-01", 34)
         self._set_compact_width(self.target_age_spin, "130", 40)
         self._set_compact_width(self.starting_cash_spin, "-9999999", 48)
+        self._set_compact_width(self.cash_minimum_spin, "-9999999", 48)
         self._set_compact_width(self.capital_gains_tax_spin, "99.99", 48)
         self._set_compact_width(self.portfolio_start_spin, "-9999999", 48)
         self._set_compact_width(self.portfolio_growth_spin, "-10.0", 48)
@@ -1483,6 +1489,7 @@ class PlannerWindow(QMainWindow):
             ("Birthday", self.birthday_edit),
             ("Target Age", self.target_age_spin),
             ("Starting Cash", self.starting_cash_spin),
+            ("Cash Minimum", self.cash_minimum_spin),
             ("Capital Gains Tax %", self.capital_gains_tax_spin),
             ("Starting Portfolio", self.portfolio_start_spin),
             ("Portfolio Growth %", self.portfolio_growth_spin),
@@ -1847,6 +1854,7 @@ class PlannerWindow(QMainWindow):
         self.birthday_edit.editingFinished.connect(self._on_plan_input_changed)
         self.target_age_spin.valueChanged.connect(self._on_plan_input_changed)
         self.starting_cash_spin.valueChanged.connect(self._on_plan_input_changed)
+        self.cash_minimum_spin.valueChanged.connect(self._on_plan_input_changed)
         self.capital_gains_tax_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_start_spin.valueChanged.connect(self._on_plan_input_changed)
         self.portfolio_growth_spin.valueChanged.connect(self._on_plan_input_changed)
@@ -2791,6 +2799,7 @@ class PlannerWindow(QMainWindow):
             ),
             start_month=date.fromisoformat(self.start_month_edit.text().strip()),
             starting_cash_balance=self.starting_cash_spin.value(),
+            cash_minimum_balance=self.cash_minimum_spin.value(),
             capital_gains_tax_rate=self.capital_gains_tax_spin.value() / 100.0,
             portfolio=Portfolio(
                 starting_balance=self.portfolio_start_spin.value(),
@@ -2899,6 +2908,7 @@ class PlannerWindow(QMainWindow):
             self.birthday_edit.setText(plan.person.birth_date.isoformat())
             self.target_age_spin.setValue(plan.person.target_age_years)
             self.starting_cash_spin.setValue(plan.starting_cash_balance)
+            self.cash_minimum_spin.setValue(plan.cash_minimum_balance)
             self.capital_gains_tax_spin.setValue(plan.capital_gains_tax_rate * 100.0)
             self.portfolio_start_spin.setValue(plan.portfolio.starting_balance)
             self.portfolio_growth_spin.setValue(plan.portfolio.annual_growth_rate * 100.0)
@@ -3036,7 +3046,7 @@ class PlannerWindow(QMainWindow):
             self.timeline_widget.set_timeline(None, None, [])
             self.balance_timeline_widget.set_timeline(None, None, [])
             self.event_timeline_widget.set_timeline(None, None, [])
-            self._update_zero_balance_warning(None, None)
+            self._update_zero_balance_warning(None, None, None, plan.cash_minimum_balance)
             return
 
         scenario_series, balance_series = self._chart_series(plan, result, plan_end)
@@ -3046,6 +3056,8 @@ class PlannerWindow(QMainWindow):
         self._update_zero_balance_warning(
             self._first_total_balance_zero_date(result),
             self._first_cash_balance_zero_date(result),
+            self._first_cash_minimum_underrun_date(result, plan.cash_minimum_balance),
+            plan.cash_minimum_balance,
         )
         self._update_chart_container_size()
 
@@ -3087,7 +3099,7 @@ class PlannerWindow(QMainWindow):
             )
 
         balance_specs = [
-            ("Cash Balance", QColor("#4a5568"), "cash_balance"),
+            ("Cash Balance", QColor("#2563eb"), "cash_balance"),
             ("Portfolio", QColor("#7f3c8d"), "portfolio_balance"),
             ("Total", QColor(TEXT_COLOR), "total_balance"),
         ]
@@ -3180,6 +3192,14 @@ class PlannerWindow(QMainWindow):
                 return record.month
         return None
 
+    def _first_cash_minimum_underrun_date(self, result, cash_minimum_balance: float) -> date | None:
+        if cash_minimum_balance == 0:
+            return None
+        for record in result.records:
+            if record.cash_balance < cash_minimum_balance:
+                return record.month
+        return None
+
     def _warning_age_text(self, warning_date: date | None) -> str:
         if warning_date is None:
             return ""
@@ -3190,12 +3210,23 @@ class PlannerWindow(QMainWindow):
         except Exception:
             return ""
 
-    def _update_zero_balance_warning(self, zero_date: date | None, cash_zero_date: date | None) -> None:
-        if zero_date is None and cash_zero_date is None:
+    def _update_zero_balance_warning(
+        self,
+        zero_date: date | None,
+        cash_zero_date: date | None,
+        cash_minimum_underrun_date: date | None = None,
+        cash_minimum_balance: float = 0.0,
+    ) -> None:
+        if zero_date is None and cash_zero_date is None and cash_minimum_underrun_date is None:
             self.zero_balance_warning_label.hide()
             self.zero_balance_warning_label.setText("")
             return
         messages: list[str] = []
+        if cash_minimum_underrun_date is not None:
+            messages.append(
+                f"cash balance falls below minimum of {self._format_amount_text(cash_minimum_balance)} "
+                f"on {cash_minimum_underrun_date.isoformat()}{self._warning_age_text(cash_minimum_underrun_date)}"
+            )
         if cash_zero_date is not None:
             messages.append(
                 f"cash balance reaches zero on {cash_zero_date.isoformat()}{self._warning_age_text(cash_zero_date)}"

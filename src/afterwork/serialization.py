@@ -34,6 +34,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
         },
         "start_month": _date_to_str(plan.start_month),
         "starting_cash_balance": plan.starting_cash_balance,
+        "cash_minimum_balance": plan.cash_minimum_balance,
         "capital_gains_tax_rate": plan.capital_gains_tax_rate,
         "portfolio": {
             "starting_balance": plan.portfolio.starting_balance,
@@ -129,6 +130,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
         ),
         start_month=_date_from_str(data["start_month"]),
         starting_cash_balance=float(data.get("starting_cash_balance", 0.0)),
+        cash_minimum_balance=float(data.get("cash_minimum_balance", 0.0)),
         capital_gains_tax_rate=float(data.get("capital_gains_tax_rate", 0.0)),
         portfolio=Portfolio(
             starting_balance=float(portfolio_data.get("starting_balance", 0.0)),

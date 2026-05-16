@@ -169,6 +169,7 @@ class Plan:
     person: Person
     start_month: date
     starting_cash_balance: float = 0.0
+    cash_minimum_balance: float = 0.0
     capital_gains_tax_rate: float = 0.0
     portfolio: Portfolio = field(default_factory=Portfolio)
     recurring_flows: list[RecurringFlow] = field(default_factory=list)

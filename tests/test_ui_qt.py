@@ -381,6 +381,15 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
             "Warning: cash balance reaches zero on 2040-01-01 at age 54.0.",
         )
 
+    def test_cash_minimum_warning_includes_amount_and_age(self) -> None:
+        self.window.birthday_edit.setText("1986-01-01")
+        self.window._update_zero_balance_warning(None, None, date(2035, 1, 1), 2_500.0)
+
+        self.assertEqual(
+            self.window.zero_balance_warning_label.text(),
+            "Warning: cash balance falls below minimum of 2500 on 2035-01-01 at age 49.0.",
+        )
+
     def test_combined_cash_and_total_zero_warning_lists_both_dates(self) -> None:
         self.window.birthday_edit.setText("1986-01-01")
         self.window._update_zero_balance_warning(date(2050, 7, 1), date(2040, 1, 1))
@@ -389,6 +398,27 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
             self.window.zero_balance_warning_label.text(),
             "Warning: cash balance reaches zero on 2040-01-01 at age 54.0; total value reaches zero on 2050-07-01 at age 64.5.",
         )
+
+    def test_cash_minimum_balance_round_trips_through_plan_save_load(self) -> None:
+        self.window.cash_minimum_spin.setValue(1_750)
+
+        plan = self.window._build_plan()
+        payload = self.window._save_payload(plan)
+        path = Path(self.temp_dir.name) / "plan.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        other_window = PlannerWindow(SettingsStore(Path(self.temp_dir.name) / "other-settings.json"))
+        other_window.autosave_timer.stop()
+        try:
+            self.assertEqual(plan.cash_minimum_balance, 1_750.0)
+            self.assertEqual(payload["cash_minimum_balance"], 1_750.0)
+            self.assertTrue(other_window.load_plan_from_path(path))
+            loaded_plan = other_window._build_plan()
+            self.assertIsInstance(loaded_plan, Plan)
+            self.assertEqual(loaded_plan.cash_minimum_balance, 1_750.0)
+            self.assertEqual(other_window.cash_minimum_spin.value(), 1_750.0)
+        finally:
+            other_window.close()
 
     def test_build_plan_and_ui_payload_include_market_shocks(self) -> None:
         self.window.add_market_shock()
