@@ -9,7 +9,7 @@ from afterwork.engine import SimulationEngine
 
 
 class SimulationEngineTests(unittest.TestCase):
-    def test_positive_portfolio_target_recurring_flow_moves_cash_into_portfolio(self) -> None:
+    def test_positive_portfolio_target_recurring_flow_increases_portfolio_without_reducing_cash(self) -> None:
         plan_base = Plan(
             person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
             start_month=date(2026, 1, 1),
@@ -48,13 +48,35 @@ class SimulationEngineTests(unittest.TestCase):
         portfolio_record = portfolio_result.records[0]
 
         self.assertEqual(cash_record.cash_balance, 1_400.0)
-        self.assertEqual(portfolio_record.cash_balance, 600.0)
+        self.assertEqual(portfolio_record.cash_balance, 1_000.0)
         self.assertEqual(cash_record.portfolio_balance, 5_000.0)
         self.assertEqual(portfolio_record.portfolio_balance, 5_400.0)
         self.assertEqual(cash_record.total_balance, 6_400.0)
-        self.assertEqual(portfolio_record.total_balance, 6_000.0)
+        self.assertEqual(portfolio_record.total_balance, 6_400.0)
 
-    def test_positive_portfolio_target_recurring_flow_can_undercut_minimum_cash(self) -> None:
+    def test_positive_invest_target_recurring_flow_moves_cash_into_portfolio(self) -> None:
+        plan = Plan(
+            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
+            start_month=date(2026, 1, 1),
+            starting_cash_balance=1_000.0,
+            portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
+            recurring_flows=[
+                RecurringFlow(
+                    amount=400.0,
+                    frequency=Frequency.MONTHLY,
+                    starts_on=date(2026, 1, 1),
+                    target=FlowTarget.INVEST,
+                )
+            ],
+        )
+
+        record = SimulationEngine().run(plan).records[0]
+
+        self.assertEqual(record.cash_balance, 600.0)
+        self.assertEqual(record.portfolio_balance, 5_400.0)
+        self.assertEqual(record.total_balance, 6_000.0)
+
+    def test_positive_invest_target_recurring_flow_can_trigger_minimum_cash_replenishment(self) -> None:
         plan = Plan(
             person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
             start_month=date(2026, 1, 1),
@@ -67,16 +89,16 @@ class SimulationEngineTests(unittest.TestCase):
                     amount=400.0,
                     frequency=Frequency.MONTHLY,
                     starts_on=date(2026, 1, 1),
-                    target=FlowTarget.PORTFOLIO,
+                    target=FlowTarget.INVEST,
                 )
             ],
         )
 
         record = SimulationEngine().run(plan).records[0]
 
-        self.assertEqual(record.cash_balance, 600.0)
-        self.assertEqual(record.portfolio_balance, 5_400.0)
-        self.assertEqual(record.portfolio_transfer_nominal, 0.0)
+        self.assertEqual(record.cash_balance, 1_200.0)
+        self.assertEqual(record.portfolio_balance, 4_800.0)
+        self.assertEqual(record.portfolio_transfer_nominal, 600.0)
 
     def test_negative_portfolio_target_recurring_flow_reduces_portfolio_without_changing_cash(self) -> None:
         plan = Plan(
@@ -171,6 +193,27 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertEqual(portfolio_record.cash_balance, 1_000.0)
         self.assertEqual(cash_record.portfolio_balance, 5_000.0)
         self.assertEqual(portfolio_record.portfolio_balance, 5_400.0)
+
+    def test_invest_target_one_off_event_moves_cash_into_portfolio(self) -> None:
+        plan = Plan(
+            person=Person(birth_date=date(1980, 1, 1), target_age_years=47),
+            start_month=date(2026, 1, 1),
+            starting_cash_balance=1_000.0,
+            portfolio=Portfolio(starting_balance=5_000.0, annual_growth_rate=0.0),
+            one_off_events=[
+                OneOffEvent(
+                    amount=400.0,
+                    occurs_on=date(2026, 1, 1),
+                    target=FlowTarget.INVEST,
+                )
+            ],
+        )
+
+        record = SimulationEngine().run(plan).records[0]
+
+        self.assertEqual(record.cash_balance, 600.0)
+        self.assertEqual(record.portfolio_balance, 5_400.0)
+        self.assertEqual(record.total_balance, 6_000.0)
 
     def test_one_off_event_flow_present_value_is_discounted_for_future_months(self) -> None:
         plan = Plan(

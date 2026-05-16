@@ -13,6 +13,7 @@ class Frequency(StrEnum):
 class FlowTarget(StrEnum):
     CASH = "cash"
     PORTFOLIO = "portfolio"
+    INVEST = "invest"
 
 
 class AmountBasis(StrEnum):

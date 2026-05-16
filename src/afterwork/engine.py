@@ -34,7 +34,6 @@ class SimulationEngine:
             applied_names: list[str] = []
             cash_flow_nominal = 0.0
             portfolio_contribution_nominal = 0.0
-            cash_to_portfolio_nominal = 0.0
             flow_present_value = 0.0
 
             for flow in active_recurring_flows:
@@ -45,13 +44,9 @@ class SimulationEngine:
                     continue
                 adjusted_amount = flow.nominal_amount_for_month(plan.start_month, current_month)
 
-                if flow.target == FlowTarget.CASH:
-                    cash_flow_nominal += adjusted_amount
-                else:
-                    portfolio_contribution_nominal += adjusted_amount
-                    if adjusted_amount > 0:
-                        cash_flow_nominal -= adjusted_amount
-                        cash_to_portfolio_nominal += adjusted_amount
+                cash_delta, portfolio_delta = self._target_deltas(flow.target, adjusted_amount)
+                cash_flow_nominal += cash_delta
+                portfolio_contribution_nominal += portfolio_delta
 
                 flow_present_value += flow.present_value(adjusted_amount, period_index)
                 applied_names.append(flow.display_label)
@@ -60,10 +55,9 @@ class SimulationEngine:
                 if not event.occurs_in_month(current_month):
                     continue
 
-                if event.target == FlowTarget.CASH:
-                    cash_flow_nominal += event.amount
-                else:
-                    portfolio_contribution_nominal += event.amount
+                cash_delta, portfolio_delta = self._target_deltas(event.target, event.amount)
+                cash_flow_nominal += cash_delta
+                portfolio_contribution_nominal += portfolio_delta
 
                 flow_present_value += event.amount / ((1 + monthly_discount_rate) ** period_index)
                 applied_names.append(event.display_label)
@@ -84,7 +78,7 @@ class SimulationEngine:
                 if self._shock_applies_in_month(shock, current_month)
             )
 
-            effective_cash_balance = cash_balance + cash_to_portfolio_nominal
+            effective_cash_balance = cash_balance
 
             if effective_cash_balance < plan.minimal_cash_level and plan.portfolio_withdrawal > 0:
                 while effective_cash_balance < plan.minimal_cash_level:
@@ -131,6 +125,13 @@ class SimulationEngine:
         if net_amount <= 0:
             return 0.0
         return net_amount / (1.0 - tax_rate)
+
+    def _target_deltas(self, target: FlowTarget, amount: float) -> tuple[float, float]:
+        if target == FlowTarget.CASH:
+            return amount, 0.0
+        if target == FlowTarget.PORTFOLIO:
+            return 0.0, amount
+        return -amount, amount
 
     def _shock_multiplier(self, shocks: list[MarketShock], *, current_month: date, previous_month: date) -> float:
         current_factor = 1.0

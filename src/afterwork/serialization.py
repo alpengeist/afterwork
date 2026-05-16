@@ -7,6 +7,8 @@ from typing import Any
 
 from afterwork.domain import AmountBasis, FlowTarget, Frequency, MarketShock, OneOffEvent, Person, Plan, Portfolio, RecurringFlow
 
+SCHEMA_VERSION = 2
+
 
 def _date_to_str(value: date) -> str:
     return value.isoformat()
@@ -16,8 +18,16 @@ def _date_from_str(value: str) -> date:
     return date.fromisoformat(value)
 
 
+def _flow_target_from_str(value: object, *, is_recurring: bool, schema_version: int) -> FlowTarget:
+    target_value = str(value or FlowTarget.CASH.value)
+    if is_recurring and schema_version < SCHEMA_VERSION and target_value == FlowTarget.PORTFOLIO.value:
+        return FlowTarget.INVEST
+    return FlowTarget(target_value)
+
+
 def plan_to_dict(plan: Plan) -> dict[str, Any]:
     return {
+        "schema_version": SCHEMA_VERSION,
         "person": {
             "birth_date": _date_to_str(plan.person.birth_date),
             "target_age_years": plan.person.target_age_years,
@@ -73,6 +83,7 @@ def plan_to_dict(plan: Plan) -> dict[str, Any]:
 
 
 def plan_from_dict(data: dict[str, Any]) -> Plan:
+    schema_version = int(data.get("schema_version", 1))
     recurring_flows = [
         RecurringFlow(
             amount=float(item["amount"]),
@@ -80,7 +91,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
             starts_on=_date_from_str(item["starts_on"]),
             ends_on=_date_from_str(item["ends_on"]) if item.get("ends_on") else None,
             category=item.get("category", "general"),
-            target=FlowTarget(item.get("target", FlowTarget.CASH.value)),
+            target=_flow_target_from_str(item.get("target", FlowTarget.CASH.value), is_recurring=True, schema_version=schema_version),
             amount_basis=AmountBasis(item.get("amount_basis", AmountBasis.NOMINAL.value)),
             annual_adjustment_rate=float(item.get("annual_adjustment_rate", 0.0)),
             enabled=bool(item.get("enabled", True)),
@@ -93,7 +104,7 @@ def plan_from_dict(data: dict[str, Any]) -> Plan:
             amount=float(item["amount"]),
             occurs_on=_date_from_str(item["occurs_on"]),
             category=item.get("category", "general"),
-            target=FlowTarget(item.get("target", FlowTarget.CASH.value)),
+            target=_flow_target_from_str(item.get("target", FlowTarget.CASH.value), is_recurring=False, schema_version=schema_version),
             enabled=bool(item.get("enabled", True)),
             color=item.get("color"),
         )

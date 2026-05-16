@@ -58,6 +58,7 @@ from afterwork import (
 )
 from afterwork.app_settings import SettingsStore
 from afterwork.domain import add_months, month_index
+from afterwork.serialization import SCHEMA_VERSION
 
 
 SCENARIO_HEADERS = ["Active", "Type", "Category", "Color", "Amount", "Basis", "Target", "Frequency", "Start", "Start Age", "End", "End Age", "Yearly Adj. %"]
@@ -75,7 +76,7 @@ RESULT_HEADERS = [
 ]
 FREQUENCY_OPTIONS = [frequency.value for frequency in Frequency]
 AMOUNT_BASIS_OPTIONS = [basis.value for basis in AmountBasis]
-TARGET_OPTIONS = [target.value for target in FlowTarget]
+TARGET_OPTIONS = [FlowTarget.CASH.value, FlowTarget.INVEST.value, FlowTarget.PORTFOLIO.value]
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 STEP_PLUS_ICON = (ASSET_DIR / "step-plus.svg").as_posix()
 STEP_MINUS_ICON = (ASSET_DIR / "step-minus.svg").as_posix()
@@ -438,12 +439,14 @@ class TableTextDelegate(QStyledItemDelegate):
     EDITOR_LEFT_INSET = 8
     EDITOR_TOP_INSET = 5
     EDITOR_BOTTOM_INSET = 5
+    EDITOR_CLOSED_PROPERTY = "_afterwork_editor_closed"
 
     def createEditor(self, parent, option, index):
         editor = super().createEditor(parent, option, index)
         self._apply_editor_font(editor, option, index)
         if isinstance(editor, QLineEdit):
             self._style_line_editor(editor)
+            editor.editingFinished.connect(lambda editor=editor: self._commit_and_close_editor(editor))
         return editor
 
     def updateEditorGeometry(self, editor, option, index) -> None:
@@ -470,6 +473,13 @@ class TableTextDelegate(QStyledItemDelegate):
             }
             """
         )
+
+    def _commit_and_close_editor(self, editor: QWidget) -> None:
+        if editor is None or bool(editor.property(self.EDITOR_CLOSED_PROPERTY)):
+            return
+        editor.setProperty(self.EDITOR_CLOSED_PROPERTY, True)
+        self.commitData.emit(editor)
+        self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
 
 
 class ScenarioTableDelegate(TableTextDelegate):
@@ -526,6 +536,9 @@ class ScenarioTableDelegate(TableTextDelegate):
         editor.addItems(items)
         self._apply_editor_font(editor, option, index)
         self._style_combo_editor(editor)
+        if editable and editor.lineEdit() is not None:
+            editor.lineEdit().editingFinished.connect(lambda editor=editor: self._commit_and_close_editor(editor))
+        editor.activated.connect(lambda _index, editor=editor: self._commit_and_close_editor(editor))
         return editor
 
     def _style_combo_editor(self, editor: QComboBox) -> None:
@@ -1850,6 +1863,8 @@ class PlannerWindow(QMainWindow):
     def _on_scenario_table_changed(self, _item: QTableWidgetItem) -> None:
         if self._suspend_change_tracking:
             return
+        if _item.column() == self.SCENARIO_AMOUNT_COLUMN:
+            self._normalize_amount_item(_item)
         if _item.column() == 1:
             self._sync_amount_basis_cell(_item.row())
             self._sync_frequency_cell(_item.row())
@@ -1868,6 +1883,21 @@ class PlannerWindow(QMainWindow):
         }:
             self._sort_scenario_table(select_row_id=self._scenario_row_id(_item.row()))
         self._mark_dirty()
+
+    def _normalize_amount_item(self, item: QTableWidgetItem) -> None:
+        text = item.text().strip()
+        try:
+            normalized = f"{float(text):.0f}"
+        except ValueError:
+            return
+        if text == normalized:
+            return
+        previous_suspend = self._suspend_change_tracking
+        self._suspend_change_tracking = True
+        try:
+            item.setText(normalized)
+        finally:
+            self._suspend_change_tracking = previous_suspend
 
     def _on_scenario_cell_pressed(self, row: int, column: int) -> None:
         if self._suspend_change_tracking:
@@ -2190,6 +2220,14 @@ class PlannerWindow(QMainWindow):
                 ],
             },
         }
+
+    def _loaded_target_value(self, target: object, *, row_type: str, schema_version: int) -> str:
+        normalized = str(target or FlowTarget.CASH.value).strip()
+        if row_type == "RecurringFlow" and schema_version < SCHEMA_VERSION and normalized == FlowTarget.PORTFOLIO.value:
+            return FlowTarget.INVEST.value
+        if normalized not in TARGET_OPTIONS:
+            return FlowTarget.CASH.value
+        return normalized
 
     def _scenario_date_sort_key(self, value: str, *, ascending: bool) -> tuple[int, int]:
         if not value:
@@ -2665,6 +2703,12 @@ class PlannerWindow(QMainWindow):
             return self._scenario_combo_item_value(item)
         return item.text().strip()
 
+    def _format_amount_text(self, value: object) -> str:
+        try:
+            return f"{float(value):.0f}"
+        except (TypeError, ValueError):
+            return str(value).strip()
+
     def _scenario_enabled(self, row: int) -> bool:
         item = self.scenario_table.item(row, 0)
         return item is not None and bool(item.data(SCENARIO_ACTIVE_ROLE))
@@ -2760,13 +2804,13 @@ class PlannerWindow(QMainWindow):
             values = [
                 record.month.isoformat(),
                 f"{record.age_years:.1f}",
-                f"{record.cash_flow_nominal:.2f}",
-                f"{record.portfolio_contribution_nominal:.2f}",
-                f"{record.portfolio_growth_nominal:.2f}",
-                f"{record.portfolio_transfer_nominal:.2f}",
-                f"{record.cash_balance:.2f}",
-                f"{record.portfolio_balance:.2f}",
-                f"{record.total_balance:.2f}",
+                self._format_amount_text(record.cash_flow_nominal),
+                self._format_amount_text(record.portfolio_contribution_nominal),
+                self._format_amount_text(record.portfolio_growth_nominal),
+                self._format_amount_text(record.portfolio_transfer_nominal),
+                self._format_amount_text(record.cash_balance),
+                self._format_amount_text(record.portfolio_balance),
+                self._format_amount_text(record.total_balance),
                 ", ".join(record.applied_flow_names),
             ]
             for column, value in enumerate(values):
@@ -2777,8 +2821,9 @@ class PlannerWindow(QMainWindow):
                 self.results_table.setItem(row, column, item)
 
         self.summary_label.setText(
-            f"Months: {len(result.records)}   Cash: {result.final_cash_balance:.2f}   "
-            f"Portfolio: {result.final_portfolio_balance:.2f}   Total: {result.final_total_balance:.2f}"
+            f"Months: {len(result.records)}   Cash: {self._format_amount_text(result.final_cash_balance)}   "
+            f"Portfolio: {self._format_amount_text(result.final_portfolio_balance)}   "
+            f"Total: {self._format_amount_text(result.final_total_balance)}"
         )
         self.refresh_timeline()
 
@@ -2827,6 +2872,7 @@ class PlannerWindow(QMainWindow):
             return False
 
         ui_state = data.get("_ui", {}) if isinstance(data, dict) else {}
+        schema_version = int(data.get("schema_version", 1)) if isinstance(data, dict) else 1
         parameters = ui_state.get("parameters", {}) if isinstance(ui_state, dict) else {}
         scenario_rows = ui_state.get("scenario_rows", []) if isinstance(ui_state, dict) else []
         shock_rows = ui_state.get("shock_rows", []) if isinstance(ui_state, dict) else []
@@ -2881,9 +2927,13 @@ class PlannerWindow(QMainWindow):
                             row_type,
                             str(row.get("category", "general")),
                             color,
-                            str(row.get("amount", "0")),
+                            self._format_amount_text(row.get("amount", "0")),
                             amount_basis,
-                            str(row.get("target", FlowTarget.CASH.value)),
+                            self._loaded_target_value(
+                                row.get("target", FlowTarget.CASH.value),
+                                row_type=row_type,
+                                schema_version=schema_version,
+                            ),
                             str(row.get("frequency", "")),
                             str(row.get("start", "")),
                             str(row.get("end", "")),
@@ -2902,7 +2952,7 @@ class PlannerWindow(QMainWindow):
                             "RecurringFlow",
                             flow.category,
                             str(flow.color or self._flow_series_color(self.scenario_table.rowCount()).name().upper()),
-                            str(flow.amount),
+                            self._format_amount_text(flow.amount),
                             flow.amount_basis.value,
                             flow.target.value,
                             flow.frequency.value,
@@ -2918,7 +2968,7 @@ class PlannerWindow(QMainWindow):
                             "OneOffEvent",
                             event.category,
                             str(event.color or QColor(WARNING_COLOR).name().upper()),
-                            str(event.amount),
+                            self._format_amount_text(event.amount),
                             "",
                             event.target.value,
                             "",
