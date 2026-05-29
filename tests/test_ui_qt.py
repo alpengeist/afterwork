@@ -9,7 +9,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QPoint, QPointF, Qt, qInstallMessageHandler
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QAbstractItemView, QComboBox, QLineEdit
@@ -290,6 +290,45 @@ class PlannerWindowScenarioSortingTests(unittest.TestCase):
         QApplication.processEvents()
 
         self.assertEqual(self.window.scenario_table.currentColumn(), category_column)
+
+    def test_sorted_amount_editor_does_not_emit_foreign_commit_warning(self) -> None:
+        messages: list[str] = []
+
+        def message_handler(_mode, _context, message: str) -> None:
+            messages.append(message)
+
+        previous_handler = qInstallMessageHandler(message_handler)
+        try:
+            self.window.show()
+            QApplication.processEvents()
+            for amount in ("100", "20"):
+                self.window.add_one_off_event()
+                row = self.window.scenario_table.rowCount() - 1
+                self.window.scenario_table.item(row, self.window.SCENARIO_AMOUNT_COLUMN).setText(amount)
+
+            self.window._on_scenario_header_clicked(self.window.SCENARIO_AMOUNT_COLUMN)
+            QApplication.processEvents()
+
+            amount_column = self.window.SCENARIO_AMOUNT_COLUMN
+            amount_item = self.window.scenario_table.item(0, amount_column)
+            self.window.scenario_table.setCurrentCell(0, amount_column)
+            self.window.scenario_table.editItem(amount_item)
+            QApplication.processEvents()
+
+            editor = self.window.scenario_table.viewport().findChild(QLineEdit)
+            self.assertIsInstance(editor, QLineEdit)
+            editor.selectAll()
+            QTest.keyClicks(editor, "123.4")
+            QTest.keyClick(editor, Qt.Key.Key_Return)
+            QApplication.processEvents()
+            QApplication.processEvents()
+        finally:
+            qInstallMessageHandler(previous_handler)
+
+        self.assertNotIn(
+            "QAbstractItemView::commitData called with an editor that does not belong to this view",
+            messages,
+        )
 
     def test_date_editor_commits_on_enter_and_next_click_works(self) -> None:
         self.window.show()

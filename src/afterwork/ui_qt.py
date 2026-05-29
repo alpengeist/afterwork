@@ -12,6 +12,7 @@ from PySide6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QBrush, QCloseEvent, QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QAbstractSpinBox,
     QComboBox,
     QDialog,
@@ -453,7 +454,6 @@ class TableTextDelegate(QStyledItemDelegate):
         self._apply_editor_font(editor, option, index)
         if isinstance(editor, QLineEdit):
             self._style_line_editor(editor)
-            editor.editingFinished.connect(lambda editor=editor: self._commit_and_close_editor(editor))
         return editor
 
     def updateEditorGeometry(self, editor, option, index) -> None:
@@ -543,8 +543,6 @@ class ScenarioTableDelegate(TableTextDelegate):
         editor.addItems(items)
         self._apply_editor_font(editor, option, index)
         self._style_combo_editor(editor)
-        if editable and editor.lineEdit() is not None:
-            editor.lineEdit().editingFinished.connect(lambda editor=editor: self._commit_and_close_editor(editor))
         editor.activated.connect(lambda _index, editor=editor: self._commit_and_close_editor(editor))
         return editor
 
@@ -1880,7 +1878,14 @@ class PlannerWindow(QMainWindow):
             self.SCENARIO_START_COLUMN,
             self.SCENARIO_END_COLUMN,
         }:
-            self._sort_scenario_table(select_row_id=self._scenario_row_id(_item.row()))
+            select_row_id = self._scenario_row_id(_item.row())
+            if self.scenario_table.state() == QAbstractItemView.State.EditingState:
+                QTimer.singleShot(
+                    0,
+                    lambda select_row_id=select_row_id: self._sort_scenario_table(select_row_id=select_row_id),
+                )
+            else:
+                self._sort_scenario_table(select_row_id=select_row_id)
         self._mark_dirty()
 
     def _normalize_amount_item(self, item: QTableWidgetItem) -> None:
