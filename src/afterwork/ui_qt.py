@@ -429,6 +429,13 @@ def apply_app_theme(app: QApplication) -> None:
     app.setStyleSheet(APP_STYLESHEET)
 
 
+def _age_at_date_text(birth_date: date | None, on_date: date) -> str:
+    if birth_date is None:
+        return ""
+    age_years = Person(birth_date=birth_date, target_age_years=0).age_years_at(on_date)
+    return f"Age {age_years:.1f}"
+
+
 @dataclass(frozen=True)
 class ChartPoint:
     month: date
@@ -840,6 +847,7 @@ class TimelineWidget(QWidget):
         super().__init__(parent)
         self.plan_start: date | None = None
         self.plan_end: date | None = None
+        self.birth_date: date | None = None
         self.series: list[ChartSeries] = []
         self._cached_pixmap: QPixmap | None = None
         self.y_axis_interval = y_axis_interval
@@ -851,9 +859,16 @@ class TimelineWidget(QWidget):
         self._hover_pos: QPoint | None = None
         self.setMouseTracking(True)
 
-    def set_timeline(self, plan_start: date | None, plan_end: date | None, series: list[ChartSeries]) -> None:
+    def set_timeline(
+        self,
+        plan_start: date | None,
+        plan_end: date | None,
+        series: list[ChartSeries],
+        birth_date: date | None = None,
+    ) -> None:
         self.plan_start = plan_start
         self.plan_end = plan_end
+        self.birth_date = birth_date
         self.series = series
         self._cached_pixmap = None
         size = self.sizeHint()
@@ -1173,7 +1188,10 @@ class TimelineWidget(QWidget):
     def _hover_text(self, pos: QPoint) -> str:
         month_value = self._month_for_x(pos.x())
         y_value = self._value_for_y(pos.y())
-        return f"{month_value.isoformat()} | {y_value:,.0f}"
+        parts = [month_value.isoformat(), f"{y_value:,.0f}"]
+        if age_text := _age_at_date_text(self.birth_date, month_value):
+            parts.append(age_text)
+        return " | ".join(parts)
 
     def _month_for_x(self, x_pos: int) -> date:
         assert self.plan_start is not None and self.plan_end is not None
@@ -1220,9 +1238,9 @@ class EventTimelineWidget(QWidget):
     LEFT_MARGIN = 150
     RIGHT_MARGIN = 24
     TOP_MARGIN = 20
-    BOTTOM_MARGIN = 20
+    BOTTOM_MARGIN = 48
     ROW_HEIGHT = 28
-    MONTH_WIDTH = 10
+    MONTH_WIDTH = 16
     DOT_RADIUS = 5
     BAR_HEIGHT = 10
 
@@ -1230,12 +1248,22 @@ class EventTimelineWidget(QWidget):
         super().__init__(parent)
         self.plan_start: date | None = None
         self.plan_end: date | None = None
+        self.birth_date: date | None = None
         self.items: list[EventTimelineItem] = []
+        self._hover_pos: QPoint | None = None
+        self.setMouseTracking(True)
         self.setMinimumHeight(self.TOP_MARGIN + self.BOTTOM_MARGIN + self.ROW_HEIGHT * 4)
 
-    def set_timeline(self, plan_start: date | None, plan_end: date | None, items: list[EventTimelineItem]) -> None:
+    def set_timeline(
+        self,
+        plan_start: date | None,
+        plan_end: date | None,
+        items: list[EventTimelineItem],
+        birth_date: date | None = None,
+    ) -> None:
         self.plan_start = plan_start
         self.plan_end = plan_end
+        self.birth_date = birth_date
         self.items = items
         size = self.sizeHint()
         self.setMinimumSize(size)
@@ -1260,6 +1288,18 @@ class EventTimelineWidget(QWidget):
 
         self._draw_grid(painter)
         self._draw_items(painter)
+        self._draw_hover_date(painter)
+
+    def mouseMoveEvent(self, event) -> None:
+        pos = event.position().toPoint()
+        self._hover_pos = pos if self._is_in_plot_area(pos) else None
+        self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hover_pos = None
+        self.update()
+        super().leaveEvent(event)
 
     def _timeline_months(self) -> int:
         if self.plan_start is None or self.plan_end is None:
@@ -1277,24 +1317,49 @@ class EventTimelineWidget(QWidget):
     def _row_y(self, index: int) -> int:
         return self.TOP_MARGIN + index * self.ROW_HEIGHT + self.ROW_HEIGHT // 2
 
+    def _plot_bottom(self) -> int:
+        return self.TOP_MARGIN + max(len(self.items), 1) * self.ROW_HEIGHT
+
     def _draw_grid(self, painter: QPainter) -> None:
         assert self.plan_start is not None
         total_months = self._timeline_months()
-        plot_bottom = self.TOP_MARGIN + max(len(self.items), 1) * self.ROW_HEIGHT
+        plot_bottom = self._plot_bottom()
         quarter_pen = QPen(QColor("#dde6f0"))
-        year_pen = QPen(QColor(MUTED_TEXT_COLOR))
 
         for month_offset in range(0, total_months + 1, 3):
-            tick_date = add_months(self.plan_start, month_offset)
             x = self.LEFT_MARGIN + month_offset * self.MONTH_WIDTH
             painter.setPen(quarter_pen)
             painter.drawLine(x, self.TOP_MARGIN - 8, x, plot_bottom)
-            if tick_date.month == 1:
-                painter.setPen(year_pen)
-                painter.drawText(x + 4, 12, f"{tick_date.year}")
 
         painter.setPen(QPen(QColor("#d0dae7")))
         painter.drawLine(self.LEFT_MARGIN, plot_bottom, self.width() - self.RIGHT_MARGIN, plot_bottom)
+
+        label_pen = QPen(QColor(MUTED_TEXT_COLOR))
+        font_metrics = QFontMetrics(painter.font())
+        for month_offset in range(total_months):
+            tick_date = add_months(self.plan_start, month_offset)
+            x = self.LEFT_MARGIN + month_offset * self.MONTH_WIDTH
+            painter.setPen(label_pen)
+            painter.drawLine(x, plot_bottom, x, plot_bottom + (6 if tick_date.month == 1 else 3))
+
+            month_center_x = x + self.MONTH_WIDTH // 2
+            month_label = str(tick_date.month)
+            month_width = max(font_metrics.horizontalAdvance(month_label) + 2, self.MONTH_WIDTH)
+            painter.drawText(
+                QRect(month_center_x - month_width // 2, plot_bottom + 22, month_width, 18),
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                month_label,
+            )
+
+            if month_offset == 0 or tick_date.month == 1:
+                year_label = str(tick_date.year)
+                year_width = font_metrics.horizontalAdvance(year_label) + 8
+                year_x = max(self.LEFT_MARGIN, min(x + 3, self.width() - self.RIGHT_MARGIN - year_width))
+                painter.drawText(
+                    QRect(year_x, plot_bottom + 3, year_width, 18),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                    year_label,
+                )
 
     def _draw_items(self, painter: QPainter) -> None:
         font_metrics = QFontMetrics(painter.font())
@@ -1323,6 +1388,39 @@ class EventTimelineWidget(QWidget):
             painter.setPen(QPen(item.color.darker(130), 1))
             painter.setBrush(QBrush(item.color))
             painter.drawRoundedRect(bar_rect, 4, 4)
+
+    def _draw_hover_date(self, painter: QPainter) -> None:
+        if self._hover_pos is None or self.plan_start is None or self.plan_end is None:
+            return
+
+        month_value = self._month_for_x(self._hover_pos.x())
+        cursor_x = self._x_for_month(month_value, center=True)
+        painter.setPen(QPen(QColor("#64748b"), 1, Qt.PenStyle.DashLine))
+        painter.drawLine(cursor_x, self.TOP_MARGIN, cursor_x, self._plot_bottom())
+
+        label_parts = [month_value.strftime("%b %Y")]
+        if age_text := _age_at_date_text(self.birth_date, month_value):
+            label_parts.append(age_text)
+        label = " | ".join(label_parts)
+        font_metrics = QFontMetrics(painter.font())
+        bubble_width = font_metrics.horizontalAdvance(label) + 16
+        bubble_height = font_metrics.height() + 8
+        bubble_x = max(4, min(self._hover_pos.x() - bubble_width // 2, self.width() - bubble_width - 4))
+        bubble_y = min(self._hover_pos.y() + 12, self.height() - bubble_height - 4)
+        bubble_rect = QRect(bubble_x, bubble_y, bubble_width, bubble_height)
+        painter.setPen(QPen(QColor("#334155")))
+        painter.setBrush(QBrush(QColor(251, 253, 255, 242)))
+        painter.drawRoundedRect(bubble_rect, 6, 6)
+        painter.drawText(bubble_rect, Qt.AlignmentFlag.AlignCenter, label)
+
+    def _month_for_x(self, x_pos: int) -> date:
+        assert self.plan_start is not None and self.plan_end is not None
+        month_offset = math.floor((x_pos - self.LEFT_MARGIN) / self.MONTH_WIDTH)
+        month_offset = max(0, min(month_offset, self._timeline_months() - 1))
+        return add_months(self.plan_start, month_offset)
+
+    def _is_in_plot_area(self, pos: QPoint) -> bool:
+        return self.LEFT_MARGIN <= pos.x() <= self.width() - self.RIGHT_MARGIN and self.TOP_MARGIN <= pos.y() <= self._plot_bottom()
 
 
 class PlannerWindow(QMainWindow):
@@ -3055,9 +3153,14 @@ class PlannerWindow(QMainWindow):
             return
 
         scenario_series, balance_series = self._chart_series(plan, result, plan_end)
-        self.timeline_widget.set_timeline(plan.start_month, plan_end, scenario_series)
-        self.balance_timeline_widget.set_timeline(plan.start_month, plan_end, balance_series)
-        self.event_timeline_widget.set_timeline(plan.start_month, plan_end, self._event_timeline_items(plan, plan_end))
+        self.timeline_widget.set_timeline(plan.start_month, plan_end, scenario_series, plan.person.birth_date)
+        self.balance_timeline_widget.set_timeline(plan.start_month, plan_end, balance_series, plan.person.birth_date)
+        self.event_timeline_widget.set_timeline(
+            plan.start_month,
+            plan_end,
+            self._event_timeline_items(plan, plan_end),
+            plan.person.birth_date,
+        )
         self._update_zero_balance_warning(
             self._first_total_balance_zero_date(result),
             self._first_cash_balance_zero_date(result),
